@@ -27,6 +27,11 @@
     --violet:#b58cff;
     --bone:#dfe7e3;
     --mute:#6c8088;
+    /* mirrored as custom properties so the canvas code can read the insets too */
+    --sat:env(safe-area-inset-top,0px);
+    --sab:env(safe-area-inset-bottom,0px);
+    --sal:env(safe-area-inset-left,0px);
+    --sar:env(safe-area-inset-right,0px);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{width:100%;height:100%;overflow:hidden;background:var(--ink);overscroll-behavior:none;}
@@ -73,7 +78,9 @@
   @keyframes wv{0%{opacity:0;letter-spacing:.9em}18%{opacity:1;letter-spacing:.3em}70%{opacity:1}100%{opacity:0;letter-spacing:.34em}}
 
   /* ---------- overlays ---------- */
-  .veil{position:absolute;inset:0;background:radial-gradient(120% 100% at 50% 40%,#050809e6,#020304f2);
+  /* fixed, not absolute: pinned to the display rather than to #wrap, so an overlay can
+     never leave an uncovered strip if the wrapper is short */
+  .veil{position:fixed;inset:0;background:radial-gradient(120% 100% at 50% 40%,#050809e6,#020304f2);
     display:flex;align-items:center;justify-content:center;z-index:5;
     padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
             calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));}
@@ -126,6 +133,9 @@
   #touchDash.ready{border-color:var(--phos);box-shadow:0 0 18px #9dff5c22}
   #touchDash.press{transform:scale(.9);background:#9dff5c33}
   #touchDash.cool{opacity:.45}
+  #probe{position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;
+    padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px)
+            env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)}
   #touchPause{position:absolute;right:calc(14px + env(safe-area-inset-right));top:calc(14px + env(safe-area-inset-top));
     width:44px;height:44px;border:1px solid var(--line);background:#0a1013cc;color:var(--mute);
     display:none;align-items:center;justify-content:center;font:inherit;font-size:13px;
@@ -136,6 +146,16 @@
   body.touch .desktopOnly{display:none}
   /* keep the top HUD clear of the pause button */
   body.touch .bars,body.touch .meta{padding-right:52px}
+  /* the fixed stick occupies the bottom-left corner — lift the upgrade chips above it */
+  body.touch #chips{bottom:calc(24px + env(safe-area-inset-bottom) + 132px);max-width:calc(100vw - 130px)}
+  /* Landscape has no vertical room to stack chips above the stick — put them beside it. */
+  @media (max-height:460px){
+    body.touch #chips{
+      bottom:calc(12px + env(safe-area-inset-bottom));
+      left:calc(env(safe-area-inset-left) + 150px);
+      max-width:calc(100vw - 150px - 120px - env(safe-area-inset-left) - env(safe-area-inset-right));
+    }
+  }
   @media (max-width:620px){
     #cards{grid-template-columns:1fr;gap:7px;margin:12px 0 12px}
     .card{padding:13px 12px}.card .ic{font-size:19px;margin-bottom:5px;display:inline-block;margin-right:8px}
@@ -181,6 +201,9 @@
 
   <button id="touchDash">DASH</button>
   <button id="touchPause" aria-label="Pause">❚❚</button>
+  <!-- env() in a custom property is not resolved by getPropertyValue, so read the
+       safe-area insets off a real element's computed padding instead -->
+  <div id="probe" aria-hidden="true"></div>
 
   <!-- START -->
   <div class="veil" id="vStart">
@@ -196,8 +219,8 @@
         <kbd>W A S D</kbd> / <kbd>↑ ← ↓ →</kbd> move &nbsp;·&nbsp; <kbd>SPACE</kbd> dash (brief invulnerability) &nbsp;·&nbsp; <kbd>1 2 3</kbd> pick upgrade &nbsp;·&nbsp; <kbd>R</kbd> reroll &nbsp;·&nbsp; <kbd>P</kbd> pause
       </p>
       <p class="sub" style="display:none" id="touchHelp">
-        <b>Drag anywhere</b> — a stick appears under your thumb and follows it.<br>
-        <b>Tap DASH</b>, or tap with a second finger anywhere, to blink.<br>
+        <b>Stick, bottom-left</b> — drag anywhere on the left to steer.<br>
+        <b>Tap DASH</b>, or tap anywhere on the right, to blink.<br>
         Tap <b>❚❚</b> top-right to pause.
       </p>
       <button class="btn" id="startBtn">DEPLOY</button>
@@ -300,10 +323,18 @@ const STANDALONE = matchMedia('(display-mode: standalone)').matches ||
                    matchMedia('(display-mode: fullscreen)').matches ||
                    navigator.standalone === true;
 const wrapEl = document.getElementById('wrap');
+
+/* iOS standalone under-reports innerHeight, which left a strip above the home indicator.
+   Take the largest of the trustworthy measures instead: overshooting is invisible
+   (body is overflow:hidden, so it just clips), while undershooting is exactly the bug.
+   screen.* is deliberately excluded — it does not reliably follow orientation. */
 function fitStandalone(){
   if (!STANDALONE) return;
-  wrapEl.style.width  = window.innerWidth + 'px';
-  wrapEl.style.height = window.innerHeight + 'px';
+  const de = document.documentElement;
+  const vv = window.visualViewport;
+  const h = Math.max(window.innerHeight || 0, de.clientHeight || 0, vv ? vv.height : 0);
+  const w = Math.max(window.innerWidth  || 0, de.clientWidth  || 0, vv ? vv.width  : 0);
+  if (w > 0 && h > 0){ wrapEl.style.width = w + 'px'; wrapEl.style.height = h + 'px'; }
 }
 
 function resize(){
@@ -313,6 +344,7 @@ function resize(){
   if (!W || !H) return;
   cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  layoutStick();
   zoomTarget = calcZoom();
   ZOOM = zoomTarget;   // snap on resize; only upgrades animate
 }
@@ -1175,7 +1207,7 @@ function render(){
     g.addColorStop(1, 'rgba(255,61,110,' + k + ')');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
   }
-  if (touch.on) drawStick();
+  if (IS_TOUCH && game.state === 'play') drawStick();
 }
 
 function drawGrid(){
@@ -1303,11 +1335,20 @@ function offscreenMark(x, y, col){
   ctx.restore();
 }
 
+/* Drawn in screen space, at the fixed anchor, whenever the game is running — dimmed
+   while idle so it stays readable without competing with the action. */
 function drawStick(){
-  ctx.strokeStyle = 'rgba(157,255,92,.28)'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(touch.ox, touch.oy, 46, 0, TAU); ctx.stroke();
-  ctx.fillStyle = 'rgba(157,255,92,.5)';
-  ctx.beginPath(); ctx.arc(touch.ox + touch.x*46, touch.oy + touch.y*46, 17, 0, TAU); ctx.fill();
+  const live = touch.on;
+  ctx.strokeStyle = live ? 'rgba(157,255,92,.34)' : 'rgba(157,255,92,.16)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(stickX, stickY, STICK_R, 0, TAU); ctx.stroke();
+
+  ctx.strokeStyle = live ? 'rgba(157,255,92,.14)' : 'rgba(157,255,92,.07)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(stickX, stickY, STICK_R*0.46, 0, TAU); ctx.stroke();
+
+  ctx.fillStyle = live ? 'rgba(157,255,92,.52)' : 'rgba(157,255,92,.22)';
+  ctx.beginPath(); ctx.arc(stickX + touch.kx, stickY + touch.ky, KNOB_R, 0, TAU); ctx.fill();
 }
 
 /* ============================================================
@@ -1495,13 +1536,32 @@ function dash(){
   buzz(12);
 }
 
-/* ---------- touch ---------- */
-const STICK = 46;            // stick travel in CSS px
-const DEADZONE = 0.14;       // ignore thumb jitter
-const FULL_AT = 0.62;        // treat this much tilt as max speed — phones need an easy 100%
+/* ---------- touch ----------
+   The stick is anchored bottom-left and always on screen. Direction is measured from
+   that fixed anchor, so the base never drifts under the thumb. */
+const STICK_R = 54;          // base radius / max knob travel, CSS px
+const KNOB_R = 22;
+const DEADZONE = 0.16;       // ignore thumb jitter
+const FULL_AT = 0.72;        // treat this much tilt as max speed
+const GRAB_FRAC = 0.62;      // left portion of the canvas that grabs the stick
 
-const touch = { on:false, id:null, ox:0, oy:0, x:0, y:0 };
+// kx/ky are the knob's pixel offset for drawing; x/y are the normalised move vector
+const touch = { on:false, id:null, x:0, y:0, kx:0, ky:0 };
 let dashTouchId = null, dashTouchT = 0;
+let stickX = 0, stickY = 0;
+
+const probeEl = document.getElementById('probe');
+function insets(){
+  const s = getComputedStyle(probeEl);
+  return { t:parseFloat(s.paddingTop)||0, r:parseFloat(s.paddingRight)||0,
+           b:parseFloat(s.paddingBottom)||0, l:parseFloat(s.paddingLeft)||0 };
+}
+function layoutStick(){
+  const i = insets();
+  const pad = H < 460 ? 18 : 26;
+  stickX = i.l + pad + STICK_R;
+  stickY = H - i.b - pad - STICK_R;
+}
 
 /* Browsers reject vibrate() before the first real user gesture, and firing it on every
    single hit is both console spam and unpleasant — so gate it and rate-limit it. */
@@ -1525,11 +1585,12 @@ if (IS_TOUCH){
 }
 
 function stickVec(cx, cy){
-  let dx = cx - touch.ox, dy = cy - touch.oy;
+  // measured from the fixed anchor, and clamped there — the base does not move
+  let dx = cx - stickX, dy = cy - stickY;
   const d = Math.hypot(dx, dy);
-  // once past the edge, the stick origin follows the thumb instead of clamping dead
-  if (d > STICK){ dx = dx/d*STICK; dy = dy/d*STICK; touch.ox = cx - dx; touch.oy = cy - dy; }
-  let mx = dx/STICK, my = dy/STICK;
+  if (d > STICK_R){ dx = dx/d*STICK_R; dy = dy/d*STICK_R; }
+  touch.kx = dx; touch.ky = dy;
+  let mx = dx/STICK_R, my = dy/STICK_R;
   const m = Math.hypot(mx, my);
   if (m < DEADZONE){ touch.x = touch.y = 0; return; }
   // remap [DEADZONE..FULL_AT] -> [0..1] so a modest thumb push already runs flat out
@@ -1540,12 +1601,12 @@ function stickVec(cx, cy){
 cv.addEventListener('touchstart', e => {
   e.preventDefault();
   for (const t of e.changedTouches){
-    if (!touch.on){
-      // first finger down owns the movement stick
+    // left portion grabs the stick; anywhere else is a dash tap
+    if (!touch.on && t.clientX < W*GRAB_FRAC){
       touch.on = true; touch.id = t.identifier;
-      touch.ox = t.clientX; touch.oy = t.clientY; touch.x = 0; touch.y = 0;
+      stickVec(t.clientX, t.clientY);
     } else if (dashTouchId === null){
-      // any additional finger is a dash tap (resolved on lift, so a drag doesn't count)
+      // resolved on lift, so a drag never counts as a tap
       dashTouchId = t.identifier; dashTouchT = performance.now();
     }
   }
@@ -1561,19 +1622,24 @@ cv.addEventListener('touchmove', e => {
 function endTouch(e){
   for (const t of e.changedTouches){
     if (t.identifier === touch.id){
-      touch.on = false; touch.id = null; touch.x = touch.y = 0;
+      touch.on = false; touch.id = null;
+      touch.x = touch.y = 0; touch.kx = touch.ky = 0;   // knob springs back to centre
     } else if (t.identifier === dashTouchId){
       // short tap with the off hand = dash
       if (performance.now() - dashTouchT < 350) dash();
       dashTouchId = null;
     }
   }
-  // if the stick finger lifted while another is still down, hand the stick over
-  if (!touch.on && dashTouchId !== null && e.touches && e.touches.length){
-    const t = e.touches[0];
-    touch.on = true; touch.id = t.identifier;
-    touch.ox = t.clientX; touch.oy = t.clientY; touch.x = 0; touch.y = 0;
-    dashTouchId = null;
+  // if the stick finger lifted while another is still down in the grab zone, hand over
+  if (!touch.on && e.touches){
+    for (const t of e.touches){
+      if (t.clientX < W*GRAB_FRAC){
+        touch.on = true; touch.id = t.identifier;
+        stickVec(t.clientX, t.clientY);
+        if (t.identifier === dashTouchId) dashTouchId = null;
+        break;
+      }
+    }
   }
 }
 cv.addEventListener('touchend', endTouch, {passive:false});
@@ -1633,6 +1699,31 @@ reset();
 game.state = 'menu';
 syncPlaying();
 loadBest();
+
+/* Append ?debug=1 to show the real viewport numbers on-device. Diagnosing layout on a
+   phone is otherwise guesswork — this reports what the device actually thinks. */
+if (/[?&]debug=1/.test(location.search)){
+  const d = document.createElement('pre');
+  d.style.cssText = 'position:fixed;left:6px;top:calc(6px + env(safe-area-inset-top));z-index:99;' +
+    'margin:0;padding:7px 9px;background:#000c;color:#9dff5c;font:10px/1.5 ui-monospace,monospace;' +
+    'border:1px solid #16232a;pointer-events:none;white-space:pre;max-width:92vw';
+  document.body.appendChild(d);
+  const upd = () => {
+    const i = insets(), w = wrapEl.getBoundingClientRect(), c = cv.getBoundingClientRect();
+    d.textContent =
+      'standalone ' + STANDALONE + '  dpr ' + (window.devicePixelRatio||1) + '\n' +
+      'inner      ' + innerWidth + ' x ' + innerHeight + '\n' +
+      'docEl      ' + document.documentElement.clientWidth + ' x ' + document.documentElement.clientHeight + '\n' +
+      'visualVP   ' + (visualViewport ? Math.round(visualViewport.width)+' x '+Math.round(visualViewport.height) : 'n/a') + '\n' +
+      'screen     ' + screen.width + ' x ' + screen.height + '\n' +
+      'wrap       ' + Math.round(w.width) + ' x ' + Math.round(w.height) + '\n' +
+      'canvas     ' + Math.round(c.width) + ' x ' + Math.round(c.height) + '\n' +
+      'canvas bot ' + Math.round(c.bottom) + '   gap ' + Math.round(innerHeight - c.bottom) + '\n' +
+      'insets     t' + i.t + ' r' + i.r + ' b' + i.b + ' l' + i.l + '\n' +
+      'stick      ' + Math.round(stickX) + ',' + Math.round(stickY) + '   zoom ' + ZOOM.toFixed(2);
+  };
+  upd(); setInterval(upd, 500); addEventListener('resize', upd);
+}
 raf = requestAnimationFrame(loop);
 </script>
 </body>
