@@ -1,0 +1,18 @@
+{
+  "name": "DEADZONE — endless zombie survivor",
+  "short_name": "DEADZONE",
+  "description": "An endless auto-aim zombie survivor. Your rifle fires itself — your only job is to keep moving.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#070a0c",
+  "theme_color": "#070a0c",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
