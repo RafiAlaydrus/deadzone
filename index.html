@@ -218,12 +218,16 @@
       <p class="sub desktopOnly">
         <kbd>W A S D</kbd> / <kbd>↑ ← ↓ →</kbd> move &nbsp;·&nbsp; <kbd>SPACE</kbd> dash (brief invulnerability) &nbsp;·&nbsp; <kbd>1 2 3</kbd> pick upgrade &nbsp;·&nbsp; <kbd>R</kbd> reroll &nbsp;·&nbsp; <kbd>P</kbd> pause
       </p>
+      <p class="sub" id="resumeMeta" style="display:none"></p>
       <p class="sub" style="display:none" id="touchHelp">
         <b>Stick, bottom-left</b> — drag anywhere on the left to steer.<br>
         <b>Tap DASH</b>, or tap anywhere on the right, to blink.<br>
         Tap <b>❚❚</b> top-right to pause.
       </p>
-      <button class="btn" id="startBtn">DEPLOY</button>
+      <div class="row">
+        <button class="btn" id="continueBtn" style="display:none">CONTINUE</button>
+        <button class="btn" id="startBtn">DEPLOY</button>
+      </div>
     </div>
   </div>
 
@@ -724,6 +728,11 @@ function update(dt){
   cam.y += (player.y - cam.y) * Math.min(1, dt*9);
   if (game.shake > 0) game.shake = Math.max(0, game.shake - dt*26);
   if (game.flash > 0) game.flash = Math.max(0, game.flash - dt*1.6);
+
+  // periodic autosave; the important ones are on pause/hide below, this is the backstop
+  // for a hard kill (swipe-away, crash, battery death)
+  saveT += dt;
+  if (saveT >= SAVE_EVERY){ saveT = 0; saveRun(); }
 }
 
 function updatePlayer(dt){
@@ -1077,6 +1086,7 @@ function choose(id){
   game.state = 'play';
   last = performance.now();
   syncPlaying();
+  saveRun();          // an upgrade pick is worth never losing
 }
 
 function reroll(){
@@ -1432,6 +1442,7 @@ function die(){
   game.flash = 1; game.shake = 18;
   keepAwake(false);
   syncPlaying();
+  clearRun();          // the run is over — nothing left to resume
   if (game.t > best.time) best = {time:game.t, wave:game.wave, level:game.level, kills:game.kills};
   saveBest();
   el('dTime').textContent = fmt(game.t);
@@ -1450,6 +1461,7 @@ function die(){
 function togglePause(){
   if (game.state === 'play'){
     game.state = 'pause'; el('vPause').classList.remove('hide'); keepAwake(false);
+    saveRun();
   } else if (game.state === 'pause'){
     game.state = 'play'; el('vPause').classList.add('hide');
     last = performance.now(); keepAwake(true);
@@ -1478,6 +1490,125 @@ async function keepAwake(on){
 addEventListener('visibilitychange', () => {
   if (!document.hidden && game && game.state === 'play') keepAwake(true);
 });
+
+/* ============================================================
+   RUN AUTOSAVE
+   Snapshots the run so closing the app never loses progress. Transient things
+   (bullets, particles, blasts) are deliberately not saved: they live for a fraction of
+   a second, and bullets carry a Set of already-hit enemies that will not survive JSON.
+   ============================================================ */
+const SAVE_KEY = 'deadzone:run';
+const SAVE_EVERY = 2.0;      // seconds between periodic writes
+const SAVE_MIN_T = 4;        // don't offer to resume a run barely started
+let saveT = 0;
+
+const r1 = v => Math.round(v*10)/10;
+
+function saveRun(){
+  if (!game || !player) return;
+  if (game.state !== 'play' && game.state !== 'pause' && game.state !== 'level') return;
+  if (game.t < SAVE_MIN_T) return;
+  try {
+    const d = {
+      v:1, at:Date.now(),
+      g:{ t:game.t, wave:game.wave, kills:game.kills, level:game.level, xp:game.xp,
+          need:game.need, up:game.up, rerolls:game.rerolls, pending:game.pending,
+          spawnT:game.spawnT, shield:game.shield, shieldT:game.shieldT, bossT:game.bossT },
+      p:{ x:r1(player.x), y:r1(player.y), vx:r1(player.vx), vy:r1(player.vy),
+          hp:r1(player.hp), aim:player.aim, dashCd:player.dashCd, orbA:player.orbA },
+      c:{ x:r1(cam.x), y:r1(cam.y) },
+      // enemies as flat arrays — a lot smaller than objects at 170+ of them
+      e:enemies.filter(e => !e.dead).slice(0, 240).map(e => [
+          e.kind, r1(e.x), r1(e.y), r1(e.vx), r1(e.vy), r1(e.hp), r1(e.max), r1(e.spd),
+          r1(e.dmg), r1(e.wob), r1(e.burn), r1(e.burnT), r1(e.slowT), r1(e.slowV),
+          r1(e.shootT), e === game.boss ? 1 : 0 ]),
+      m:gems.slice(0, 400).map(g => [r1(g.x), r1(g.y), g.v, g.r])
+    };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(d));
+  } catch(e){ /* quota or private mode — a lost autosave must never break the run */ }
+}
+
+function loadRun(){
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    if (!d || d.v !== 1 || !d.g || !d.p) return null;
+    return d;
+  } catch(e){ return null; }
+}
+
+function clearRun(){ try { localStorage.removeItem(SAVE_KEY); } catch(e){} }
+
+function resumeRun(d){
+  reset();                       // build the structures, then overwrite them
+  Object.assign(game, d.g);
+  S = recalc();
+  Object.assign(player, d.p);
+  player.hp = Math.min(player.hp, S.maxHp);
+  cam.x = d.c ? d.c.x : player.x;
+  cam.y = d.c ? d.c.y : player.y;
+
+  for (const a of (d.e || [])){
+    const T = TYPES[a[0]];
+    if (!T) continue;            // unknown type from an older build — skip it
+    const e = { kind:a[0], T, x:a[1], y:a[2], vx:a[3], vy:a[4], r:T.r,
+      hp:a[5], max:a[6], spd:a[7], dmg:a[8], wob:a[9], burn:a[10], burnT:a[11],
+      slowT:a[12], slowV:a[13], shootT:a[14],
+      atk:0, flash:0, hitT:0, spawnT:0 };
+    enemies.push(e);
+    if (a[15]) game.boss = e;
+  }
+  for (const g of (d.m || [])) gems.push({x:g[0], y:g[1], vx:0, vy:0, v:g[2], r:g[3], life:0});
+
+  ZOOM = zoomTarget = calcZoom();
+  syncChips(); syncHud(true);
+  el('vStart').classList.add('hide');
+  el('vDead').classList.add('hide');
+  el('vPause').classList.add('hide');
+  game.state = 'play';
+  syncPlaying();
+  last = performance.now();
+  keepAwake(true);
+  if (!raf) raf = requestAnimationFrame(loop);
+  // closed mid-levelup? put the card screen back
+  if (game.pending > 0) openLevel();
+  else banner('WAVE ' + game.wave);
+}
+
+function whenText(ts){
+  const d = new Date(ts), now = new Date();
+  const hm = String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  const sameDay = d.toDateString() === now.toDateString();
+  const yest = new Date(now); yest.setDate(now.getDate() - 1);
+  const isYest = d.toDateString() === yest.toDateString();
+  const date = sameDay ? 'Today' : isYest ? 'Yesterday'
+    : d.getDate() + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()]
+      + (d.getFullYear() !== now.getFullYear() ? ' ' + d.getFullYear() : '');
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  const ago = mins < 1 ? 'just now' : mins < 60 ? mins + 'm ago'
+    : mins < 1440 ? Math.floor(mins/60) + 'h ago' : Math.floor(mins/1440) + 'd ago';
+  return date + ' ' + hm + ' · ' + ago;
+}
+
+/* Shows the CONTINUE button on the start screen when a run is waiting. */
+function offerResume(){
+  const d = loadRun();
+  const btn = el('continueBtn'), meta = el('resumeMeta'), start = el('startBtn');
+  if (!d){
+    btn.style.display = 'none'; meta.style.display = 'none';
+    start.textContent = 'DEPLOY'; start.classList.remove('ghost');
+    return null;
+  }
+  btn.style.display = '';
+  start.textContent = 'NEW RUN';
+  start.classList.add('ghost');
+  meta.style.display = '';
+  meta.innerHTML = 'Run in progress — <b>WAVE ' + d.g.wave + '</b> · <b>LEVEL ' + d.g.level +
+    '</b> · <b>' + fmt(d.g.t) + '</b> survived · <b>' + d.g.kills + '</b> kills<br>' +
+    'Last played ' + whenText(d.at) + '. Starting a new run discards it.';
+  return d;
+}
 
 /* ---------- best score (safe, optional persistence) ---------- */
 const BEST_KEY = 'deadzone:best';
@@ -1520,7 +1651,9 @@ addEventListener('keyup', e => keys.delete(e.code));
 function autoPause(){
   keys.clear();
   // drop the stick, or the player keeps running in the direction the thumb was last seen
-  touch.on = false; touch.id = null; touch.x = touch.y = 0; dashTouchId = null;
+  touch.on = false; touch.id = null; touch.x = touch.y = touch.kx = touch.ky = 0;
+  dashTouchId = null;
+  saveRun();                       // synchronous — this is the one that catches app close
   if (game && game.state === 'play') togglePause();
 }
 addEventListener('blur', autoPause);
@@ -1666,7 +1799,8 @@ tapBind(dashBtn, () => {
 });
 tapBind(el('touchPause'), () => { if (game && (game.state === 'play' || game.state === 'pause')) togglePause(); });
 
-el('startBtn').onclick = start;
+el('startBtn').onclick = () => { clearRun(); start(); };
+el('continueBtn').onclick = () => { const d = loadRun(); if (d) resumeRun(d); else start(); };
 el('againBtn').onclick = start;
 el('resumeBtn').onclick = togglePause;
 el('rerollBtn').onclick = reroll;
@@ -1699,6 +1833,7 @@ reset();
 game.state = 'menu';
 syncPlaying();
 loadBest();
+offerResume();
 
 /* Append ?debug=1 to show the real viewport numbers on-device. Diagnosing layout on a
    phone is otherwise guesswork — this reports what the device actually thinks. */

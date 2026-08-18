@@ -8,6 +8,8 @@ Harvest the green cores they drop, level up, pick a mutation, repeat. There is n
 
 Installable as a PWA and **fully playable offline** — once loaded, it needs no signal at all.
 
+Runs autosave continuously, so closing the app never loses progress. Reopen it and you're offered your run back, with when you last played it.
+
 ## Install on your phone
 
 1. Open the link above in Safari (iOS) or Chrome (Android).
