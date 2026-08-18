@@ -29,15 +29,18 @@
     --mute:#6c8088;
   }
   *{box-sizing:border-box;margin:0;padding:0}
-  html,body{height:100%;overflow:hidden;background:var(--ink);overscroll-behavior:none;}
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--ink);overscroll-behavior:none;}
   body{
     font-family:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
     color:var(--bone);
     -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
     touch-action:none;
   }
-  /* dvh keeps the canvas correct while mobile browser chrome slides in/out */
-  #wrap{position:fixed;inset:0;height:100dvh;}
+  /* With viewport-fit=cover, a fixed element pinned on all four sides covers the entire
+     display — including under the notch and the home indicator. Do NOT also set an
+     explicit height: that over-constrains the box, and iOS standalone computes dvh
+     without the safe areas, leaving a dead black strip at the bottom. */
+  #wrap{position:fixed;top:0;left:0;right:0;bottom:0;}
   canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:crosshair;}
 
   /* ---------- HUD ---------- */
@@ -288,7 +291,23 @@ function calcZoom(){
   return clamp(Math.min(z, fit), MIN_ZOOM, 1);
 }
 
+/* Installed (home-screen) mode has no browser chrome, so window.innerHeight is exactly
+   the whole display. iOS has a long history of leaving a dead strip above the home
+   indicator there, so in standalone we pin the wrapper to innerHeight explicitly rather
+   than trusting the CSS box. Inert in a normal browser tab, where the collapsing
+   toolbars make innerHeight the wrong thing to trust. */
+const STANDALONE = matchMedia('(display-mode: standalone)').matches ||
+                   matchMedia('(display-mode: fullscreen)').matches ||
+                   navigator.standalone === true;
+const wrapEl = document.getElementById('wrap');
+function fitStandalone(){
+  if (!STANDALONE) return;
+  wrapEl.style.width  = window.innerWidth + 'px';
+  wrapEl.style.height = window.innerHeight + 'px';
+}
+
 function resize(){
+  fitStandalone();
   DPR = Math.min(window.devicePixelRatio || 1, DPR_CAP);
   W = cv.clientWidth; H = cv.clientHeight;
   if (!W || !H) return;
@@ -1595,6 +1614,17 @@ el('rerollBtn').onclick = reroll;
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')){
   addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch(err => console.warn('[sw]', err));
+  });
+
+  /* Navigations are served cache-first, so without this a new build would only appear on
+     the *second* launch. When a newer worker takes over, reload once to pick it up.
+     Guarded two ways: ignore the first-ever install (no previous controller), and never
+     reload twice, so a failing worker can't spin. */
+  let hadController = !!navigator.serviceWorker.controller, reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) { hadController = true; return; }
+    reloading = true;
+    location.reload();
   });
 }
 

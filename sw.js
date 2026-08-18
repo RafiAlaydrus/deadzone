@@ -3,7 +3,7 @@
    precache of the shell is enough to make it fully playable with no signal at all.
 
    Bump CACHE when you change any precached file, or clients keep the old copy. */
-const CACHE = 'deadzone-v1';
+const CACHE = 'deadzone-v2';
 
 const ASSETS = [
   './',
