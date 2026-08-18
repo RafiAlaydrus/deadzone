@@ -376,7 +376,7 @@ const BASE = {
   lifesteal:0, explodeR:0, explodeDmg:0, burn:0, chain:0, slow:0, homing:0,
   ricochet:0, orbits:0, orbitDmg:0, aura:0, auraR:100, thorns:0, shieldMax:0,
   shieldCd:13, dashCd:3.4, turrets:0, novaChance:0, eliteDmg:1, adrenaline:0,
-  doubleTap:0, greed:0, luck:0, magnet:false
+  doubleTap:0, greed:0, luck:0, magnet:false, threat:0
 };
 
 const UPGRADES = [
@@ -407,6 +407,9 @@ const UPGRADES = [
   {id:'giant', ic:'☠', name:'Giant Slayer',   rarity:'rare', max:4, desc:'+25% damage to brutes, bloaters and bosses', apply:s=>s.eliteDmg+=0.25},
   {id:'adren', ic:'♦', name:'Adrenaline',     rarity:'rare', max:3, desc:'+20% move speed while below 40% vitals', apply:s=>s.adrenaline+=0.20},
   {id:'greed', ic:'$', name:'Scavenger',      rarity:'rare', max:4, desc:'+20% chance a corpse drops an extra core', apply:s=>s.greed+=0.20},
+  // Rare, not epic, on purpose: this is the answer to Screamers, and a needed answer
+  // must not be gated behind a rare draw.
+  {id:'threat',ic:'◈', name:'Threat Assessment', rarity:'rare', max:3, desc:'Auto-aim stops picking the nearest and picks the biggest threat — screamers, elites, enraged, and leapers mid-crouch. Chaff lives longer', apply:s=>s.threat+=1},
 
   // ---- epic ----
   {id:'multi', ic:'⋔', name:'Split Shot',     rarity:'epic', max:6, desc:'+1 bullet per volley (slight spread)', apply:s=>{s.projectiles+=1;s.spread+=0.02;}},
@@ -433,6 +436,10 @@ const RARITY_W = { common:100, rare:44, epic:19, legendary:6.5 };
 /* ============================================================
    ENEMY TYPES
    ============================================================ */
+const LEAP_TELEGRAPH = 0.7;   // wind-up you get to react to
+const LEAP_SPEED = 620;
+const LEAP_RECOVER = 0.6;     // exposed window after landing
+
 const TYPES = {
   walker:  {hp:18,  spd:52,  dmg:9,  r:12, xp:1,  col:'#79b563', dark:'#2f4c27', name:'walker'},
   runner:  {hp:13,  spd:112, dmg:7,  r:10, xp:1,  col:'#e0a13f', dark:'#5a3f14', name:'runner'},
@@ -440,6 +447,11 @@ const TYPES = {
   spitter: {hp:34,  spd:46,  dmg:11, r:13, xp:3,  col:'#4fd6ff', dark:'#14454f', ranged:true, name:'spitter'},
   bloater: {hp:70,  spd:40,  dmg:15, r:19, xp:4,  col:'#e8734f', dark:'#4d2517', boom:true, elite:true, name:'bloater'},
   brute:   {hp:150, spd:38,  dmg:24, r:23, xp:6,  col:'#b58cff', dark:'#3a2a5c', elite:true, name:'brute'},
+  // Crouches, telegraphs, then leaps to where you WILL be — punishes a constant orbit
+  leaper:  {hp:26,  spd:74,  dmg:17, r:11, xp:2,  col:'#ffd166', dark:'#5c4413', leaper:true, name:'leaper'},
+  // Never attacks. Sits outside your scan ring and enrages the horde. Auto-aim will not
+  // pick it, so you have to walk at it. Marked elite for the health bar readability.
+  screamer:{hp:64,  spd:62,  dmg:8,  r:15, xp:5,  col:'#ff5cf0', dark:'#4d1450', screamer:true, elite:true, name:'screamer'},
   boss:    {hp:900, spd:47,  dmg:34, r:40, xp:70, col:'#ff3d6e', dark:'#4d0d20', boss:true, elite:true, name:'abomination'}
 };
 
@@ -499,8 +511,10 @@ function typeRoll(){
   if (t > 40)  pool.push(['runner', 58]);
   if (t > 85)  pool.push(['crawler', 55]);
   if (t > 130) pool.push(['brute', 22]);
+  if (t > 150) pool.push(['leaper', 26]);
   if (t > 175) pool.push(['spitter', 30]);
   if (t > 225) pool.push(['bloater', 28]);
+  if (t > 270) pool.push(['screamer', 9]);
   let tot = 0; for (const p of pool) tot += p[1];
   let r = Math.random() * tot;
   for (const p of pool){ r -= p[1]; if (r <= 0) return p[0]; }
@@ -508,15 +522,24 @@ function typeRoll(){
 }
 
 const ENEMY_CAP = IS_TOUCH ? 170 : 260;
+const SCREAMER_MAX = 2;   // their rage buff stacks on the same horde — hard cap the count
+function countKind(kind){
+  let n = 0;
+  for (const e of enemies) if (e.kind === kind && !e.dead) n++;
+  return n;
+}
 function spawnAt(kind, x, y){
   if (enemies.length > ENEMY_CAP && kind !== 'boss') return;
+  if (kind === 'screamer' && countKind('screamer') >= SCREAMER_MAX) kind = 'runner';
   const T = TYPES[kind], d = diff();
   const e = {
     kind, T, x, y, vx:0, vy:0, r:T.r,
     hp:T.hp * (kind === 'boss' ? 1 + game.t/180 : d.hp),
     max:0, spd:T.spd * d.spd * rnd(1.08, 0.92), dmg:T.dmg * d.dmg,
     atk:0, flash:0, burn:0, burnT:0, slowT:0, slowV:0, hitT:0, wob:rnd(TAU),
-    shootT:rnd(2.5,1), spawnT:0.35
+    shootT:rnd(2.5,1), spawnT:0.35,
+    rage:0, screamT:rnd(5.5, 3),
+    lp: T.leaper ? { ph:'idle', t:rnd(2.2, 0.9), tx:0, ty:0 } : null
   };
   e.max = e.hp;
   enemies.push(e);
@@ -582,6 +605,32 @@ function boom(x, y, r, dmg, col = '#ffb545'){
   game.shake = Math.max(game.shake, 5);
 }
 
+/* Tuned so a scream is an event, not a permanent state. At 560r / 6s rage / 8.5s cycle,
+   two screamers kept ~95% of the horde enraged at all times, which just reads as "the
+   game got harder" instead of "deal with that thing now". */
+const SCREAM_R = 420, RAGE_TIME = 5;
+const SCREAM_CYCLE = 11;
+/* Enrages the surrounding horde and adds bodies. Deals no damage itself — the Screamer's
+   whole threat is what it does to everything else. */
+function scream(e){
+  // Faint at full radius so the player learns the reach without it washing out the
+  // screen; a bright tight ring marks the source.
+  blasts.push({x:e.x, y:e.y, r:SCREAM_R, life:0.6, max:0.6, col:'#ff5cf0', a:0.30, w:0.6});
+  blasts.push({x:e.x, y:e.y, r:SCREAM_R*0.55, life:0.45, max:0.45, col:'#ff8ae8', a:0.45, w:0.7});
+  blasts.push({x:e.x, y:e.y, r:e.r*3.2, life:0.35, max:0.35, col:'#ff5cf0', a:1, w:1.4});
+  game.shake = Math.max(game.shake, 5);
+  popText(e.x, e.y - e.r - 12, 'SCREAM', '#ff5cf0');
+  for (const o of near(e.x, e.y, SCREAM_R)){
+    if (o === e || o.dead || o.T.screamer) continue;
+    if (Math.hypot(o.x - e.x, o.y - e.y) < SCREAM_R) o.rage = RAGE_TIME;
+  }
+  const n = 3 + Math.floor(game.t / 200);
+  for (let i = 0; i < n; i++){
+    const a = rnd(TAU);
+    spawnAt(Math.random() < 0.5 ? 'runner' : 'walker', e.x + Math.cos(a)*70, e.y + Math.sin(a)*70);
+  }
+}
+
 /* ============================================================
    SPATIAL GRID
    ============================================================ */
@@ -617,8 +666,33 @@ function nearest(x, y, maxD, skip){
 /* ============================================================
    COMBAT
    ============================================================ */
+/* Default auto-aim is nearest. Threat Assessment swaps it for a weighted score, which is
+   a genuine trade: the things that matter die first, but chaff lives longer. */
+function bestTarget(x, y, maxD){
+  if (!S.threat) return nearest(x, y, maxD);
+  let best = null, bs = -Infinity;
+  for (const e of near(x, y, maxD)){
+    if (e.dead) continue;
+    const dx = e.x-x, dy = e.y-y, d2 = dx*dx + dy*dy;
+    if (d2 > maxD*maxD) continue;
+    const d = Math.sqrt(d2);
+    let s = 0;
+    if (e.T.screamer) s += 130;                      // the one auto-aim would never pick
+    if (e.T.boss) s += 95;
+    if (e.lp && e.lp.ph === 'crouch') s += 80;       // about to land on you
+    if (e.T.elite) s += 40;
+    if (e.rage > 0) s += 28;
+    s += (1 - e.hp/e.max) * 24;                      // finish what's nearly dead
+    s -= (d/maxD) * 42;                              // proximity still counts, weakly
+    if (S.threat > 1 && e.T.ranged) s += 26;         // rank 2: add spitters
+    if (S.threat > 2) s += Math.min(30, e.max/40);   // rank 3: favour the beefy
+    if (s > bs){ bs = s; best = e; }
+  }
+  return best || nearest(x, y, maxD);
+}
+
 function fire(){
-  const tgt = nearest(player.x, player.y, S.range);
+  const tgt = bestTarget(player.x, player.y, S.range);
   if (!tgt) return false;
   const lead = Math.hypot(tgt.x-player.x, tgt.y-player.y) / S.bulletSpeed;
   const base = Math.atan2(tgt.y + tgt.vy*lead - player.y, tgt.x + tgt.vx*lead - player.x);
@@ -642,6 +716,7 @@ function fire(){
 function hurt(e, dmg, o = {}){
   if (e.dead) return;
   if (e.T.elite) dmg *= S.eliteDmg;
+  if (e.lp && e.lp.ph === 'recover') dmg *= 1.5;   // dodging a leap earns the opening
   let crit = false;
   if (!o.noCrit && Math.random() < S.crit){ crit = true; dmg *= S.critMult; }
   dmg = Math.round(dmg);
@@ -846,6 +921,7 @@ function updateEnemies(dt){
     }
     let slow = 1;
     if (e.slowT > 0){ e.slowT -= dt; slow = 1 - e.slowV; }
+    if (e.rage > 0) e.rage -= dt;
 
     const dx = player.x - e.x, dy = player.y - e.y;
     const d = Math.hypot(dx, dy) || 1;
@@ -864,12 +940,63 @@ function updateEnemies(dt){
       }
     }
 
-    const sp = e.spd * slow * (e.spawnT > 0 ? 0.3 : 1);
-    e.vx += (ax*sp - e.vx) * Math.min(1, dt*7);
-    e.vy += (ay*sp - e.vy) * Math.min(1, dt*7);
+    // screamer holds station just outside the scan ring and orbits there
+    if (e.T.screamer){
+      const want = S.range + 60;
+      if (d < want - 40){ ax = -ax; ay = -ay; }              // too close — back off
+      else if (d < want + 50){                                // on station — strafe
+        const nx = -dy/d, ny = dx/d;
+        ax = nx*0.92 + ax*0.16; ay = ny*0.92 + ay*0.16;
+      }
+      e.screamT -= dt;
+      if (e.screamT <= 0){ e.screamT = SCREAM_CYCLE; scream(e); }
+    }
 
-    // separation
-    const nb = near(e.x, e.y, e.r + 22);
+    // leaper: idle -> crouch (telegraph) -> air (ballistic) -> recover (vulnerable)
+    let steer = true, drag = true;
+    if (e.lp){
+      const L = e.lp;
+      L.t -= dt;
+      if (L.ph === 'idle'){
+        if (L.t <= 0 && d > 95 && d < 470){
+          L.ph = 'crouch'; L.t = LEAP_TELEGRAPH;
+          // Commit to where the player WILL be, and never re-aim. Holding a constant
+          // orbit walks into it; changing velocity during the telegraph dodges it.
+          const flight = d / LEAP_SPEED + LEAP_TELEGRAPH;
+          L.tx = player.x + player.vx * flight * 0.85;
+          L.ty = player.y + player.vy * flight * 0.85;
+        }
+      } else if (L.ph === 'crouch'){
+        steer = false;                                        // plant and wind up
+        e.vx *= Math.pow(0.02, dt); e.vy *= Math.pow(0.02, dt);
+        if (L.t <= 0){
+          const a = Math.atan2(L.ty - e.y, L.tx - e.x);
+          const dd = Math.hypot(L.tx - e.x, L.ty - e.y);
+          L.ph = 'air'; L.t = Math.min(1.2, dd / LEAP_SPEED);
+          e.vx = Math.cos(a)*LEAP_SPEED; e.vy = Math.sin(a)*LEAP_SPEED;
+        }
+      } else if (L.ph === 'air'){
+        steer = drag = false;                                 // ballistic, no steering
+        if (L.t <= 0){
+          L.ph = 'recover'; L.t = LEAP_RECOVER;
+          burst(e.x, e.y, 10, e.T.col, 220, 0.4, 2.6);
+          game.shake = Math.max(game.shake, 4);
+        }
+      } else if (L.ph === 'recover'){
+        steer = false;                                        // winded and exposed
+        e.vx *= Math.pow(0.05, dt); e.vy *= Math.pow(0.05, dt);
+        if (L.t <= 0){ L.ph = 'idle'; L.t = rnd(3.4, 2.0); }
+      }
+    }
+
+    const sp = e.spd * slow * (e.rage > 0 ? 1.4 : 1) * (e.spawnT > 0 ? 0.3 : 1);
+    if (steer){
+      e.vx += (ax*sp - e.vx) * Math.min(1, dt*7);
+      e.vy += (ay*sp - e.vy) * Math.min(1, dt*7);
+    }
+
+    // separation (a leaper in flight passes through — it is committed to an arc)
+    const nb = drag ? near(e.x, e.y, e.r + 22) : [];
     for (const o of nb){
       if (o === e || o.dead) continue;
       const ox = e.x-o.x, oy = e.y-o.y, od = Math.hypot(ox, oy);
@@ -881,12 +1008,12 @@ function updateEnemies(dt){
     }
 
     e.x += e.vx*dt; e.y += e.vy*dt;
-    e.vx *= Math.pow(0.02, dt); e.vy *= Math.pow(0.02, dt);
+    if (drag){ e.vx *= Math.pow(0.02, dt); e.vy *= Math.pow(0.02, dt); }
 
     // contact
     if (d < e.r + player.r && e.atk <= 0){
       e.atk = 0.65;
-      hurtPlayer(e.dmg);
+      hurtPlayer(e.dmg * (e.rage > 0 ? 1.25 : 1));
       if (S.thorns > 0) hurt(e, S.thorns, {noCrit:true, kb:120, kx:-dx, ky:-dy});
       e.vx -= dx/d*140; e.vy -= dy/d*140;
     }
@@ -1144,11 +1271,14 @@ function render(){
 
   for (const b of blasts){
     const k = b.life/b.max;
-    ctx.strokeStyle = b.col; ctx.globalAlpha = k*0.8; ctx.lineWidth = 2 + k*3;
+    // `a` scales opacity: the scream ring is huge and would otherwise wash out the screen
+    ctx.strokeStyle = b.col; ctx.globalAlpha = k*0.8*(b.a === undefined ? 1 : b.a);
+    ctx.lineWidth = (2 + k*3) * (b.w === undefined ? 1 : b.w);
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r*(1.15 - k*0.35), 0, TAU); ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
+  drawTelegraphs();
   drawEnemies();
 
   // enemy bullets
@@ -1205,6 +1335,9 @@ function render(){
 
   // off-screen boss marker
   if (game.boss && !game.boss.dead) offscreenMark(game.boss.x, game.boss.y, '#ff3d6e');
+  // Screamers hold station outside the scan ring, which is often outside the viewport
+  // too — without a marker you get enraged with no idea where it is coming from.
+  for (const e of enemies) if (e.T.screamer && !e.dead) offscreenMark(e.x, e.y, '#ff5cf0');
 
   if (game.flash > 0){
     ctx.fillStyle = 'rgba(255,61,110,' + (game.flash*0.35) + ')';
@@ -1235,6 +1368,35 @@ function drawGrid(){
     for (let y = y0; y < y1; y += g*4) ctx.fillRect(x-1.5, y-1.5, 3, 3);
 }
 
+/* The leap telegraph. There is no audio in this game, so this has to carry the entire
+   warning on its own against a busy screen — hence the converging line, the filling
+   landing ring, and a stroke width that stays constant on screen at any zoom. */
+function drawTelegraphs(){
+  for (const e of enemies){
+    const L = e.lp;
+    if (!L || L.ph !== 'crouch' || e.dead) continue;
+    const k = 1 - L.t/LEAP_TELEGRAPH;          // 0 -> 1 across the wind-up
+    const pulse = 0.55 + Math.sin(game.t*26)*0.2;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,209,102,' + (0.30 + k*0.45) + ')';
+    ctx.lineWidth = (1.6 + k*1.6)/ZOOM;
+    ctx.setLineDash([9/ZOOM, 7/ZOOM]);
+    ctx.lineDashOffset = -game.t*40;
+    ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(L.tx, L.ty); ctx.stroke();
+    ctx.setLineDash([]);
+
+    const R = 30;
+    ctx.strokeStyle = 'rgba(255,209,102,' + pulse + ')';
+    ctx.lineWidth = 2/ZOOM;
+    ctx.beginPath(); ctx.arc(L.tx, L.ty, R, 0, TAU); ctx.stroke();
+    // ring fills as the leap approaches — a readable countdown
+    ctx.fillStyle = 'rgba(255,209,102,0.18)';
+    ctx.beginPath(); ctx.moveTo(L.tx, L.ty);
+    ctx.arc(L.tx, L.ty, R, -Math.PI/2, -Math.PI/2 + TAU*k); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+}
+
 function drawEnemies(){
   for (const e of enemies){
     const T = e.T;
@@ -1244,7 +1406,14 @@ function drawEnemies(){
     ctx.rotate(Math.atan2(e.vy, e.vx) + Math.PI/2 + wob);
 
     if (e.spawnT > 0){ ctx.globalAlpha = 1 - e.spawnT/0.35; ctx.scale(1.4 - e.spawnT, 1.4 - e.spawnT); }
-    const body = e.flash > 0 ? '#ffffff' : (e.slowT > 0 ? '#8fd3ff' : T.col);
+    // coiling before a leap, stretched in flight — silhouette reads the state
+    if (e.lp){
+      if (e.lp.ph === 'crouch'){ const k = 1 - e.lp.t/LEAP_TELEGRAPH; ctx.scale(1 + k*0.3, 1 - k*0.32); }
+      else if (e.lp.ph === 'air') ctx.scale(0.82, 1.3);
+      else if (e.lp.ph === 'recover') ctx.scale(1.18, 0.84);
+    }
+    const body = e.flash > 0 ? '#ffffff'
+      : (e.slowT > 0 ? '#8fd3ff' : (e.rage > 0 ? '#ff8a6a' : T.col));
 
     ctx.fillStyle = T.dark;
     ctx.beginPath(); ctx.ellipse(0, 3, e.r*0.95, e.r*1.12, 0, 0, TAU); ctx.fill();
@@ -1275,7 +1444,25 @@ function drawEnemies(){
       ctx.globalAlpha = 0.5; ctx.fillStyle = '#ff8a3d';
       ctx.beginPath(); ctx.arc(0, 0, e.r*1.15, 0, TAU); ctx.fill();
     }
+    // Enraged reads hot-orange, NOT the screamer's magenta — with a dozen buffed enemies
+    // on screen, sharing a colour makes the screamer itself impossible to pick out.
+    if (e.rage > 0){
+      ctx.globalAlpha = 0.8; ctx.strokeStyle = '#ff6a3d'; ctx.lineWidth = 1.5/ZOOM;
+      ctx.beginPath(); ctx.arc(0, 0, e.r*1.3, 0, TAU); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
     ctx.restore();
+
+    // screamer: standing halo so it is identifiable at a glance across the arena
+    if (T.screamer){
+      const p = 0.4 + Math.sin(game.t*3 + e.wob)*0.2;
+      ctx.strokeStyle = 'rgba(255,92,240,' + p + ')';
+      ctx.lineWidth = 2/ZOOM;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 9 + Math.sin(game.t*3)*3, 0, TAU); ctx.stroke();
+      ctx.lineWidth = 1/ZOOM;
+      ctx.strokeStyle = 'rgba(255,92,240,0.22)';
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 20, 0, TAU); ctx.stroke();
+    }
 
     if ((T.elite || T.boss) && e.hp < e.max){
       const w = e.r*2.2, k = clamp(e.hp/e.max, 0, 1);
@@ -1520,8 +1707,9 @@ function saveRun(){
       // enemies as flat arrays — a lot smaller than objects at 170+ of them
       e:enemies.filter(e => !e.dead).slice(0, 240).map(e => [
           e.kind, r1(e.x), r1(e.y), r1(e.vx), r1(e.vy), r1(e.hp), r1(e.max), r1(e.spd),
+          // index 16 (rage) is appended, so saves written before it still load
           r1(e.dmg), r1(e.wob), r1(e.burn), r1(e.burnT), r1(e.slowT), r1(e.slowV),
-          r1(e.shootT), e === game.boss ? 1 : 0 ]),
+          r1(e.shootT), e === game.boss ? 1 : 0, r1(e.rage || 0) ]),
       m:gems.slice(0, 400).map(g => [r1(g.x), r1(g.y), g.v, g.r])
     };
     localStorage.setItem(SAVE_KEY, JSON.stringify(d));
@@ -1555,7 +1743,10 @@ function resumeRun(d){
     const e = { kind:a[0], T, x:a[1], y:a[2], vx:a[3], vy:a[4], r:T.r,
       hp:a[5], max:a[6], spd:a[7], dmg:a[8], wob:a[9], burn:a[10], burnT:a[11],
       slowT:a[12], slowV:a[13], shootT:a[14],
-      atk:0, flash:0, hitT:0, spawnT:0 };
+      atk:0, flash:0, hitT:0, spawnT:0,
+      rage:a[16] || 0, screamT:rnd(5.5, 3),
+      // leapers resume idle rather than mid-air: a saved leap has no honest telegraph
+      lp: T.leaper ? { ph:'idle', t:rnd(2.2, 0.9), tx:0, ty:0 } : null };
     enemies.push(e);
     if (a[15]) game.boss = e;
   }
