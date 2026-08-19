@@ -146,6 +146,8 @@
   body.touch .desktopOnly{display:none}
   /* keep the top HUD clear of the pause button */
   body.touch .bars,body.touch .meta{padding-right:52px}
+  /* sandbox adds a second top-right button, so the bars need room for both */
+  body.sandboxing .bars,body.sandboxing .meta{padding-right:104px}
   /* the fixed stick occupies the bottom-left corner — lift the upgrade chips above it */
   body.touch #chips{bottom:calc(24px + env(safe-area-inset-bottom) + 132px);max-width:calc(100vw - 130px)}
   /* Landscape has no vertical room to stack chips above the stick — put them beside it. */
@@ -175,6 +177,59 @@
     .sub{margin:8px 0 10px}
     #touchDash{width:66px;height:66px}
   }
+  /* ---------- sandbox ---------- */
+  #sbBadge{align-self:flex-start;font-size:9px;letter-spacing:.28em;color:var(--violet);
+    border:1px solid #2e2350;background:#140f24cc;padding:2px 7px}
+  .sbTop{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:14px 0 10px}
+  .sbTop label{display:flex;align-items:center;gap:7px;font-size:10px;letter-spacing:.2em;color:var(--mute)}
+  .sbTop input{width:74px;background:#0d1317;border:1px solid var(--line);color:var(--phos);
+    font:inherit;font-size:14px;padding:7px 8px;text-align:center;pointer-events:auto}
+  .sbTop input:focus{outline:none;border-color:var(--phos-dim)}
+  .sbNote{font-size:10px;letter-spacing:.06em;color:var(--mute);line-height:1.6}
+  .sbTools{margin-bottom:10px}
+  .sbTools .btn{padding:7px 14px;font-size:10px;min-height:0}
+  #sbList{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:5px;
+    max-height:40vh;overflow-y:auto;touch-action:pan-y;overscroll-behavior:contain;
+    border:1px solid var(--line);padding:6px;background:#080c0f}
+  .sbItem{display:flex;align-items:center;gap:7px;padding:5px 7px;border:1px solid transparent;background:#0d1317}
+  .sbItem.on{border-color:var(--phos-dim);background:#0e1512}
+  .sbItem .ic{font-size:14px;width:18px;text-align:center}
+  .sbItem .nm{flex:1;font-size:10.5px;letter-spacing:.04em;color:var(--bone);line-height:1.3}
+  .sbItem .rr{font-size:8px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
+  .sbItem.rare .rr{color:var(--cool)}.sbItem.epic .rr{color:var(--violet)}
+  .sbItem.legendary .rr{color:var(--amber)}
+  .sbStep{display:flex;align-items:center;gap:4px}
+  .sbStep button{width:24px;height:24px;border:1px solid var(--line);background:#0a1013;
+    color:var(--bone);font:inherit;font-size:13px;cursor:pointer;pointer-events:auto;
+    touch-action:manipulation;line-height:1;padding:0}
+  .sbStep button:hover:not(:disabled){border-color:var(--phos-dim);color:var(--phos)}
+  .sbStep button:disabled{opacity:.3;cursor:default}
+  .sbStep .n{min-width:30px;text-align:center;font-size:11px;color:var(--phos)}
+  #sbStats{margin:12px 0}
+  #sbStats b{font-size:15px}
+  #sbToggle{position:absolute;right:calc(66px + env(safe-area-inset-right));top:calc(14px + env(safe-area-inset-top));
+    width:44px;height:44px;border:1px solid #2e2350;background:#140f24cc;color:var(--violet);
+    display:none;align-items:center;justify-content:center;font:inherit;font-size:15px;
+    pointer-events:auto;z-index:4;touch-action:manipulation}
+  body.sandboxing #sbToggle{display:flex}
+  #sbPanel{position:absolute;right:calc(12px + env(safe-area-inset-right));top:calc(64px + env(safe-area-inset-top));
+    width:min(224px,52vw);border:1px solid #2e2350;background:#0a0d14f2;padding:8px;
+    pointer-events:auto;z-index:6;max-height:64vh;overflow-y:auto;touch-action:pan-y}
+  .sbHead{display:flex;justify-content:space-between;align-items:center;
+    font-size:9px;letter-spacing:.24em;color:var(--violet);margin-bottom:7px}
+  .sbHead button{background:none;border:none;color:var(--mute);font:inherit;font-size:12px;
+    cursor:pointer;pointer-events:auto;padding:2px 4px;touch-action:manipulation}
+  #sbSpawn{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+  #sbSpawn button{border:1px solid var(--line);background:#0d1317;color:var(--bone);
+    font:inherit;font-size:9.5px;letter-spacing:.06em;padding:7px 3px;cursor:pointer;
+    pointer-events:auto;touch-action:manipulation}
+  #sbSpawn button:hover{border-color:var(--phos-dim);color:var(--phos)}
+  .sbPanelRow{display:flex;gap:4px;margin-top:7px}
+  .sbPanelRow .btn{flex:1;padding:7px 4px;font-size:9px;letter-spacing:.1em;min-height:0}
+  @media (max-width:620px){
+    #sbList{grid-template-columns:1fr;max-height:34vh}
+    .sbTop input{width:64px}
+  }
   @media (prefers-reduced-motion:reduce){*{animation-duration:.01ms!important;transition:none!important}}
 </style>
 </head>
@@ -194,6 +249,7 @@
       <span>KILLS <b id="mKills">0</b></span>
       <span>HOSTILES <b id="mAlive">0</b></span>
     </div>
+    <div id="sbBadge" class="hide">SANDBOX</div>
     <div id="bossWrap"><div id="bossName">ABOMINATION</div><div class="bar"><i id="bossFill"></i></div></div>
     <div id="wave"></div>
     <div id="chips"></div>
@@ -227,7 +283,45 @@
       <div class="row">
         <button class="btn" id="continueBtn" style="display:none">CONTINUE</button>
         <button class="btn" id="startBtn">DEPLOY</button>
+        <button class="btn ghost" id="sandboxBtn">SANDBOX</button>
       </div>
+    </div>
+  </div>
+
+  <!-- SANDBOX SETUP -->
+  <div class="veil hide" id="vSandbox">
+    <div class="panel">
+      <div class="kicker">SANDBOX · SEPARATE FROM YOUR REAL RUN</div>
+      <h2 id="sbTitle">TEST BUILD</h2>
+      <div class="sbTop">
+        <label>LEVEL<input id="sbLevel" type="number" min="1" max="200" value="1"></label>
+        <label>WAVE<input id="sbWave" type="number" min="1" max="99" value="1"></label>
+        <span class="sbNote" id="sbNote"></span>
+      </div>
+      <div class="row sbTools">
+        <button class="btn ghost" id="sbClear">CLEAR</button>
+        <button class="btn ghost" id="sbMax">MAX ALL</button>
+        <button class="btn ghost" id="sbRandom">RANDOM</button>
+      </div>
+      <div id="sbList"></div>
+      <div class="stats" id="sbStats"></div>
+      <div class="row">
+        <button class="btn" id="sbStart">START SANDBOX</button>
+        <button class="btn ghost" id="sbBack">BACK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SANDBOX IN-RUN PANEL -->
+  <!-- no .hide here: that rule is display:none!important and would beat the
+       body.sandboxing rule that reveals this button. Its CSS default is already none. -->
+  <button id="sbToggle" aria-label="Sandbox tools">⚙</button>
+  <div id="sbPanel" class="hide">
+    <div class="sbHead">SANDBOX <button id="sbClose" aria-label="Close">✕</button></div>
+    <div id="sbSpawn"></div>
+    <div class="sbPanelRow">
+      <button class="btn ghost" id="sbWipe">CLEAR FIELD</button>
+      <button class="btn ghost" id="sbEdit">EDIT BUILD</button>
     </div>
   </div>
 
@@ -491,7 +585,7 @@ function reset(){
     state:'play', t:0, wave:1, kills:0, level:1, xp:0, need:7,
     up:{}, rerolls:3, pending:0, spawnT:0.6, shake:0, shieldT:0,
     shield:0, auraT:0, boss:null, bossT:150, waveT:0, flash:0,
-    holdT:0, bossHold:0, waveClock:0
+    holdT:0, bossHold:0, waveClock:0, sandbox:false
   };
   S = recalc();
   player = {
@@ -557,10 +651,11 @@ function atCap(kind, counts){
   return (counts ? (counts[kind] || 0) : countKind(kind)) >= cap;
 }
 
-function spawnAt(kind, x, y){
+function spawnAt(kind, x, y, ignoreCap){
   if (enemies.length > ENEMY_CAP && kind !== 'boss') return;
-  // safety net for direct calls (boss adds, scream bursts, tests) — the roll filters too
-  if (atCap(kind)) kind = 'runner';
+  // safety net for direct calls (boss adds, scream bursts, tests) — the roll filters too.
+  // Sandbox spawns pass ignoreCap: if you ask for a 6th brute you should get a brute.
+  if (!ignoreCap && atCap(kind)) kind = 'runner';
   const T = TYPES[kind], d = diff();
   const e = {
     kind, T, x, y, vx:0, vy:0, r:T.r,
@@ -1701,8 +1796,18 @@ function loop(now){
   render();
 }
 
+/* Leaving sandbox has to strip its UI too, or the badge and tool button linger on a
+   real run and make it look like a test. */
+function exitSandboxUI(){
+  document.body.classList.remove('sandboxing');
+  el('sbBadge').classList.add('hide');
+  el('sbPanel').classList.add('hide');
+  el('vSandbox').classList.add('hide');
+}
+
 function start(){
   reset();
+  exitSandboxUI();
   el('vStart').classList.add('hide');
   el('vDead').classList.add('hide');
   el('vLevel').classList.add('hide');
@@ -1719,9 +1824,14 @@ function die(){
   game.flash = 1; game.shake = 18;
   keepAwake(false);
   syncPlaying();
-  clearRun();          // the run is over — nothing left to resume
-  if (game.t > best.time) best = {time:game.t, wave:game.wave, level:game.level, kills:game.kills};
-  saveBest();
+  /* A sandbox death must leave real progress completely alone: it does not clear the
+     autosave (a genuine run may still be waiting there) and never sets a best time,
+     which a hand-built maxed build would otherwise trivially beat. */
+  if (!game.sandbox){
+    clearRun();        // the run is over — nothing left to resume
+    if (game.t > best.time) best = {time:game.t, wave:game.wave, level:game.level, kills:game.kills};
+    saveBest();
+  }
   el('dTime').textContent = fmt(game.t);
   el('dWave').textContent = game.wave;
   el('dLv').textContent = game.level;
@@ -1747,7 +1857,10 @@ function togglePause(){
 }
 /* touch controls are only shown when no overlay is up */
 function syncPlaying(){
-  document.body.classList.toggle('playing', !!game && game.state === 'play');
+  const playing = !!game && game.state === 'play';
+  document.body.classList.toggle('playing', playing);
+  // the sandbox panel sits above the veils, so it must not float over a level-up screen
+  if (!playing) el('sbPanel').classList.add('hide');
 }
 
 /* ---------- keep the screen awake while playing ---------- */
@@ -1783,6 +1896,7 @@ const r1 = v => Math.round(v*10)/10;
 
 function saveRun(){
   if (!game || !player) return;
+  if (game.sandbox) return;      // never overwrite a real run with a test build
   if (game.state !== 'play' && game.state !== 'pause' && game.state !== 'level') return;
   if (game.t < SAVE_MIN_T) return;
   try {
@@ -1849,6 +1963,7 @@ function resumeRun(d){
 
   ZOOM = zoomTarget = calcZoom();
   syncChips(); syncHud(true);
+  exitSandboxUI();          // a resumed run is always a real one
   el('vStart').classList.add('hide');
   el('vDead').classList.add('hide');
   el('vPause').classList.add('hide');
@@ -1916,11 +2031,164 @@ async function saveBest(){
 }
 
 /* ============================================================
+   SANDBOX
+   A test harness, deliberately walled off from real progress: sandbox runs never write
+   the autosave and never set a best time (see saveRun / die).
+   ============================================================ */
+let sandboxCfg = { level:1, wave:1, up:{} };
+let sandboxLive = false;          // true when editing mid-run rather than pre-run
+
+const SB_SPAWN = ['walker','runner','crawler','spitter','bloater','brute','leaper','screamer'];
+
+/* Wave N implies a point on the difficulty curve, so set the clock to match — otherwise
+   "start at wave 12" would hand you wave-12 spawn rates with minute-zero enemies and
+   tell you nothing useful about the late game. */
+function waveToTime(w){ return Math.max(0, (w - 1) * 30); }
+
+function applySandbox(cfg){
+  game.sandbox = true;
+  game.up = { ...cfg.up };
+  game.level = clamp(cfg.level | 0, 1, 200);
+  game.need = Math.floor(4 + game.level*2 + Math.pow(game.level, 1.9));
+  game.xp = 0;
+  game.pending = 0;
+  const w = clamp(cfg.wave | 0, 1, 99);
+  game.wave = w;
+  game.waveClock = waveToTime(w);
+  game.t = waveToTime(w);
+  S = recalc();
+  player.hp = S.maxHp;
+  document.body.classList.add('sandboxing');
+  el('sbBadge').classList.remove('hide');
+  syncChips(); syncHud(true);
+}
+
+function startSandbox(cfg){
+  reset();                       // does NOT touch the stored run — only in-memory state
+  applySandbox(cfg);
+  for (const v of ['vStart','vDead','vLevel','vPause','vSandbox']) el(v).classList.add('hide');
+  banner('SANDBOX');
+  last = performance.now();
+  keepAwake(true);
+  syncPlaying();
+  if (!raf) raf = requestAnimationFrame(loop);
+}
+
+/* Score a config without disturbing the live run — recalc() reads game.up. */
+function sandboxStats(cfg){
+  const keep = game.up;
+  game.up = cfg.up;
+  const s = recalc();
+  game.up = keep;
+  return s;
+}
+
+function sandboxRender(){
+  const list = el('sbList');
+  list.innerHTML = '';
+  for (const u of UPGRADES){
+    const n = sandboxCfg.up[u.id] || 0;
+    const row = document.createElement('div');
+    row.className = 'sbItem ' + u.rarity + (n > 0 ? ' on' : '');
+    row.innerHTML =
+      '<span class="ic">' + u.ic + '</span>' +
+      '<span class="nm">' + u.name + '<br><span class="rr">' + u.rarity + '</span></span>' +
+      '<span class="sbStep">' +
+        '<button data-d="-1"' + (n <= 0 ? ' disabled' : '') + '>−</button>' +
+        '<span class="n">' + n + '/' + (u.max > 90 ? '∞' : u.max) + '</span>' +
+        '<button data-d="1"' + (n >= u.max ? ' disabled' : '') + '>+</button>' +
+      '</span>';
+    row.querySelectorAll('button').forEach(b => b.onclick = () => {
+      const d = +b.dataset.d;
+      const cur = sandboxCfg.up[u.id] || 0;
+      const next = clamp(cur + d, 0, u.max);
+      if (next === 0) delete sandboxCfg.up[u.id]; else sandboxCfg.up[u.id] = next;
+      sandboxRender();
+    });
+    list.appendChild(row);
+  }
+
+  const s = sandboxStats(sandboxCfg);
+  const picked = Object.values(sandboxCfg.up).reduce((a,b) => a+b, 0);
+  el('sbStats').innerHTML =
+    '<div><span>DAMAGE</span><b>' + Math.round(s.damage) + '</b></div>' +
+    '<div><span>FIRE RATE</span><b>' + s.fireRate.toFixed(1) + '</b></div>' +
+    '<div><span>DPS APPROX</span><b>' + Math.round(s.damage*s.fireRate*s.projectiles) + '</b></div>' +
+    '<div><span>RANGE</span><b>' + Math.round(s.range) + '</b></div>' +
+    '<div><span>VITALS</span><b>' + s.maxHp + '</b></div>' +
+    '<div><span>SPEED</span><b>' + Math.round(s.moveSpeed) + '</b></div>' +
+    '<div><span>CRIT</span><b>' + Math.round(s.crit*100) + '%</b></div>' +
+    '<div><span>PICKS</span><b>' + picked + '</b></div>';
+
+  const w = clamp(el('sbWave').value | 0, 1, 99);
+  const d = { m: waveToTime(w)/60 };
+  el('sbNote').innerHTML = 'Wave ' + w + ' = <b>' + fmt(waveToTime(w)) +
+    '</b> on the clock · enemies at <b>×' + (1 + d.m*0.38 + d.m*d.m*0.021).toFixed(1) +
+    '</b> health' + (w >= 4 && w % 4 === 0 ? ' · Abomination wave' : '');
+}
+
+function openSandbox(live){
+  sandboxLive = !!live;
+  sandboxCfg.level = clamp(sandboxCfg.level | 0, 1, 200);
+  sandboxCfg.wave = clamp(sandboxCfg.wave | 0, 1, 99);
+  el('sbLevel').value = sandboxCfg.level;
+  el('sbWave').value = sandboxCfg.wave;
+  el('sbTitle').textContent = live ? 'EDIT BUILD' : 'TEST BUILD';
+  el('sbStart').textContent = live ? 'APPLY' : 'START SANDBOX';
+  sandboxRender();
+  if (live){ game.state = 'pause'; syncPlaying(); el('sbPanel').classList.add('hide'); }
+  el('vStart').classList.add('hide');
+  el('vSandbox').classList.remove('hide');
+}
+
+function closeSandbox(){
+  el('vSandbox').classList.add('hide');
+  if (sandboxLive){
+    game.state = 'play'; last = performance.now(); syncPlaying();
+  } else {
+    el('vStart').classList.remove('hide');
+  }
+}
+
+function readSandboxInputs(){
+  sandboxCfg.level = clamp(el('sbLevel').value | 0, 1, 200);
+  sandboxCfg.wave  = clamp(el('sbWave').value | 0, 1, 99);
+}
+
+function buildSandboxPanel(){
+  const wrap = el('sbSpawn');
+  wrap.innerHTML = '';
+  const add = (label, fn) => {
+    const b = document.createElement('button');
+    b.textContent = label; b.onclick = fn; wrap.appendChild(b);
+  };
+  for (const k of SB_SPAWN) add(k.toUpperCase(), () => {
+    const a = rnd(TAU), r = 190 + rnd(90);
+    // ignoreCap: in a sandbox you get exactly what you asked for
+    const e = spawnAt(k, player.x + Math.cos(a)*r, player.y + Math.sin(a)*r, true);
+    if (e) e.spawnT = 0.25;
+  });
+  add('ABOMINATION', () => { if (!game.boss || game.boss.dead) spawnBoss(); });
+}
+
+/* ============================================================
    INPUT
    ============================================================ */
 addEventListener('keydown', e => {
+  /* Typing in the sandbox number fields must not drive the game — without this, digits
+     pick upgrades, Space dashes, and arrows get preventDefault'd out of the input. */
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)){
+    if (e.code === 'Escape') t.blur();
+    return;
+  }
   if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
   keys.add(e.code);
+  // desktop shortcut for the sandbox tool panel
+  if (e.code === 'Backquote' && game && game.sandbox && game.state === 'play'){
+    el('sbPanel').classList.toggle('hide');
+    return;
+  }
   if (game && game.state === 'level'){
     if (e.code === 'Digit1' && currentPicks[0]) choose(currentPicks[0].id);
     if (e.code === 'Digit2' && currentPicks[1]) choose(currentPicks[1].id);
@@ -2087,9 +2355,47 @@ tapBind(el('touchPause'), () => { if (game && (game.state === 'play' || game.sta
 
 el('startBtn').onclick = () => { clearRun(); start(); };
 el('continueBtn').onclick = () => { const d = loadRun(); if (d) resumeRun(d); else start(); };
-el('againBtn').onclick = start;
+// REDEPLOY after a sandbox death re-runs the same test config rather than dropping you
+// into a real run — and still never clears the stored run.
+el('againBtn').onclick = () => { if (game.sandbox) startSandbox(sandboxCfg); else start(); };
 el('resumeBtn').onclick = togglePause;
 el('rerollBtn').onclick = reroll;
+
+/* ---------- sandbox wiring ---------- */
+el('sandboxBtn').onclick = () => openSandbox(false);
+el('sbBack').onclick = closeSandbox;
+el('sbLevel').oninput = () => { readSandboxInputs(); sandboxRender(); };
+el('sbWave').oninput  = () => { readSandboxInputs(); sandboxRender(); };
+el('sbClear').onclick = () => { sandboxCfg.up = {}; sandboxRender(); };
+el('sbMax').onclick   = () => {
+  sandboxCfg.up = {};
+  for (const u of UPGRADES) if (u.id !== 'medkit') sandboxCfg.up[u.id] = u.max;
+  sandboxRender();
+};
+el('sbRandom').onclick = () => {
+  sandboxCfg.up = {};
+  for (const u of UPGRADES){
+    if (u.id === 'medkit') continue;
+    if (Math.random() < 0.45) sandboxCfg.up[u.id] = rint(1, u.max);
+  }
+  sandboxRender();
+};
+el('sbStart').onclick = () => {
+  readSandboxInputs();
+  if (sandboxLive){
+    applySandbox(sandboxCfg);
+    el('vSandbox').classList.add('hide');
+    game.state = 'play'; last = performance.now(); syncPlaying();
+  } else startSandbox(sandboxCfg);
+};
+el('sbToggle').onclick = () => el('sbPanel').classList.toggle('hide');
+el('sbClose').onclick  = () => el('sbPanel').classList.add('hide');
+el('sbWipe').onclick   = () => {
+  for (const e of enemies) e.dead = true;
+  game.boss = null;
+};
+el('sbEdit').onclick   = () => openSandbox(true);
+buildSandboxPanel();
 
 /* ============================================================
    BOOT
