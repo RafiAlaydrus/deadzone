@@ -538,6 +538,14 @@ const BOSS_GRACE = 40, BOSS_RAMP = 0.08, BOSS_DECAY_MAX = 8;
 const BOSS_DECAY = () =>
   Math.min(BOSS_DECAY_MAX, 1 + Math.max(0, (game.bossHold || 0) - BOSS_GRACE) * BOSS_RAMP);
 
+/* ---------- arena ----------
+   The world used to be unbounded. ARENA is the half-extent, so play spans
+   -ARENA..+ARENA on both axes: 4800 units across, roughly 8 phone screens wide and
+   ~24s to cross at base speed. Big enough to still feel open, bounded enough that
+   running forever is no longer a strategy. */
+const ARENA = 2400;
+const arenaClamp = (v, r) => clamp(v, -ARENA + r, ARENA - r);
+
 const LEAP_TELEGRAPH = 0.7;   // wind-up you get to react to
 const LEAP_SPEED = 620;
 const LEAP_RECOVER = 0.6;     // exposed window after landing
@@ -674,8 +682,17 @@ function spawnAt(kind, x, y, ignoreCap){
 function ringPoint(){
   // spawn just outside whatever the player can actually see
   const rad = Math.hypot(viewW(), viewH()) / 2 + 90;
-  const a = rnd(TAU);
-  return [player.x + Math.cos(a)*rad, player.y + Math.sin(a)*rad];
+  const lim = ARENA - 40;
+  // Near a wall many directions land out of bounds. Resample rather than clamping every
+  // time, or spawns would bunch onto the wall the player is standing against.
+  for (let i = 0; i < 10; i++){
+    const a = rnd(TAU);
+    const x = player.x + Math.cos(a)*rad, y = player.y + Math.sin(a)*rad;
+    if (x > -lim && x < lim && y > -lim && y < lim) return [x, y];
+  }
+  const a = rnd(TAU);   // wedged in a corner — clamp inward as a fallback
+  return [clamp(player.x + Math.cos(a)*rad, -lim, lim),
+          clamp(player.y + Math.sin(a)*rad, -lim, lim)];
 }
 
 function spawnWave(dt){
@@ -886,7 +903,8 @@ function kill(e){
   let n = 1 + (e.T.boss ? 9 : e.T.elite ? 2 : 0);
   if (Math.random() < S.greed) n++;
   for (let i = 0; i < n; i++){
-    gems.push({x:e.x + rnd(14,-14), y:e.y + rnd(14,-14), vx:rnd(60,-60), vy:rnd(60,-60),
+    gems.push({x:arenaClamp(e.x + rnd(14,-14), 6), y:arenaClamp(e.y + rnd(14,-14), 6),
+      vx:rnd(60,-60), vy:rnd(60,-60),
       v:e.T.xp / (e.T.boss ? 3 : 1), r:e.T.boss ? 6 : e.T.elite ? 5 : 3.6, life:0});
   }
   if (e.T.boom) boom(e.x, e.y, 92, 34 + game.t/12, '#e8734f');
@@ -956,6 +974,15 @@ function update(dt){
 
   cam.x += (player.x - cam.x) * Math.min(1, dt*9);
   cam.y += (player.y - cam.y) * Math.min(1, dt*9);
+  /* Stop the camera near the walls so you never stare at a screen half full of nothing,
+     but clamp to the arena plus CAM_MARGIN rather than to the wall itself — clamping
+     exactly at the boundary parks it one pixel off-screen, so you could never actually
+     see the limit you were pressed against. Skipped on an axis the view is wider than. */
+  const CAM_MARGIN = 170;
+  const lim = ARENA + CAM_MARGIN;
+  const chw = viewW()/2, chh = viewH()/2;
+  if (chw < lim) cam.x = clamp(cam.x, -lim + chw, lim - chw);
+  if (chh < lim) cam.y = clamp(cam.y, -lim + chh, lim - chh);
   if (game.shake > 0) game.shake = Math.max(0, game.shake - dt*26);
   if (game.flash > 0) game.flash = Math.max(0, game.flash - dt*1.6);
 
@@ -982,6 +1009,11 @@ function updatePlayer(dt){
   player.vx += (ix*spd - player.vx) * Math.min(1, dt*16);
   player.vy += (iy*spd - player.vy) * Math.min(1, dt*16);
   player.x += player.vx*dt; player.y += player.vy*dt;
+
+  // arena walls — kill the velocity component too, or you slide along feeling stuck
+  const px = arenaClamp(player.x, player.r), py = arenaClamp(player.y, player.r);
+  if (px !== player.x){ player.x = px; player.vx = 0; }
+  if (py !== player.y){ player.y = py; player.vy = 0; }
 
   player.dashT = Math.max(0, player.dashT - dt);
   player.dashCd = Math.max(0, player.dashCd - dt);
@@ -1061,7 +1093,10 @@ function updateEnemies(dt){
   for (let i = enemies.length - 1; i >= 0; i--){
     const e = enemies[i];
     if (e.dead){ enemies.splice(i, 1); continue; }
-    if (Math.hypot(e.x-player.x, e.y-player.y) > 2600){ enemies.splice(i, 1); continue; }
+    /* Despawn distance must exceed the arena diagonal (~6788), or enemies chasing you
+       from the far corner get deleted while still legitimately in play. It only exists
+       now as a safety valve for anything that escapes the bounds. */
+    if (Math.hypot(e.x-player.x, e.y-player.y) > ARENA*3){ enemies.splice(i, 1); continue; }
 
     e.flash = Math.max(0, e.flash - dt);
     e.hitT = Math.max(0, e.hitT - dt);
@@ -1118,8 +1153,10 @@ function updateEnemies(dt){
           // Commit to where the player WILL be, and never re-aim. Holding a constant
           // orbit walks into it; changing velocity during the telegraph dodges it.
           const flight = d / LEAP_SPEED + LEAP_TELEGRAPH;
-          L.tx = player.x + player.vx * flight * 0.85;
-          L.ty = player.y + player.vy * flight * 0.85;
+          // keep the landing spot inside the arena, or the telegraph promises a
+          // position the leaper can never actually reach
+          L.tx = arenaClamp(player.x + player.vx * flight * 0.85, 30);
+          L.ty = arenaClamp(player.y + player.vy * flight * 0.85, 30);
         }
       } else if (L.ph === 'crouch'){
         steer = false;                                        // plant and wind up
@@ -1163,6 +1200,7 @@ function updateEnemies(dt){
     }
 
     e.x += e.vx*dt; e.y += e.vy*dt;
+    e.x = arenaClamp(e.x, e.r); e.y = arenaClamp(e.y, e.r);
     if (drag){ e.vx *= Math.pow(0.02, dt); e.vy *= Math.pow(0.02, dt); }
 
     // contact
@@ -1265,6 +1303,9 @@ function updateGems(dt){
       g.vx += dx/d*pull*dt; g.vy += dy/d*pull*dt;
     }
     g.x += g.vx*dt; g.y += g.vy*dt;
+    // clamped every frame, not just at spawn: they scatter with velocity and would
+    // otherwise drift out and sit visibly outside the wall
+    g.x = arenaClamp(g.x, g.r); g.y = arenaClamp(g.y, g.r);
     g.vx *= Math.pow(0.12, dt); g.vy *= Math.pow(0.12, dt);
     if (d < player.r + 8){
       gems.splice(i, 1);
@@ -1394,6 +1435,7 @@ function render(){
   ctx.translate(-cam.x, -cam.y);
 
   drawGrid();
+  drawArena();
 
   // gems
   ctx.fillStyle = '#9dff5c';
@@ -1521,6 +1563,48 @@ function drawGrid(){
   ctx.fillStyle = '#1a2830';
   for (let x = x0; x < x1; x += g*4)
     for (let y = y0; y < y1; y += g*4) ctx.fillRect(x-1.5, y-1.5, 3, 3);
+}
+
+/* The arena wall. Out-of-bounds is filled flat so the playfield reads as a container
+   rather than the grid just stopping, and the rail brightens as you close on it. */
+function drawArena(){
+  const hw = viewW()/2 + 120, hh = viewH()/2 + 120;
+  const l = cam.x - hw, r = cam.x + hw, t = cam.y - hh, b = cam.y + hh;
+  if (l > -ARENA && r < ARENA && t > -ARENA && b < ARENA) return;   // wall not in view
+
+  // dead zone outside the bounds, drawn as slabs around the arena rect
+  ctx.fillStyle = '#040608';
+  const ix0 = Math.max(l, -ARENA), ix1 = Math.min(r, ARENA);
+  if (l < -ARENA) ctx.fillRect(l, t, -ARENA - l, b - t);
+  if (r >  ARENA) ctx.fillRect(ARENA, t, r - ARENA, b - t);
+  if (t < -ARENA && ix1 > ix0) ctx.fillRect(ix0, t, ix1 - ix0, -ARENA - t);
+  if (b >  ARENA && ix1 > ix0) ctx.fillRect(ix0, ARENA, ix1 - ix0, b - ARENA);
+
+  // how close the player is to any wall, 0..1
+  const near = clamp(1 - (ARENA - Math.max(Math.abs(player.x), Math.abs(player.y))) / 420, 0, 1);
+  const S2 = ARENA*2;
+
+  ctx.strokeStyle = 'rgba(157,255,92,' + (0.22 + near*0.45) + ')';
+  ctx.lineWidth = (2.5 + near*2)/ZOOM;
+  ctx.strokeRect(-ARENA, -ARENA, S2, S2);
+
+  ctx.strokeStyle = 'rgba(157,255,92,' + (0.07 + near*0.12) + ')';
+  ctx.lineWidth = 1/ZOOM;
+  ctx.setLineDash([26/ZOOM, 20/ZOOM]);
+  ctx.lineDashOffset = -game.t*18;
+  ctx.strokeRect(-ARENA + 22, -ARENA + 22, S2 - 44, S2 - 44);
+  ctx.setLineDash([]);
+
+  // corner brackets, so you can tell a corner from a straight at a glance
+  const C = 150;
+  ctx.strokeStyle = 'rgba(157,255,92,' + (0.5 + near*0.4) + ')';
+  ctx.lineWidth = 4/ZOOM;
+  for (const [sx, sy] of [[-1,-1],[1,-1],[-1,1],[1,1]]){
+    const x = sx*ARENA, y = sy*ARENA;
+    ctx.beginPath();
+    ctx.moveTo(x - sx*C, y); ctx.lineTo(x, y); ctx.lineTo(x, y - sy*C);
+    ctx.stroke();
+  }
 }
 
 /* The leap telegraph. There is no audio in this game, so this has to carry the entire
@@ -1943,13 +2027,19 @@ function resumeRun(d){
   S = recalc();
   Object.assign(player, d.p);
   player.hp = Math.min(player.hp, S.maxHp);
+  /* Saves written before the arena existed can hold coordinates far outside it — the
+     world was unbounded. Pull everything in here rather than letting the per-frame clamp
+     snap it back on the first tick, which would read as a teleport. */
+  player.x = arenaClamp(player.x, player.r);
+  player.y = arenaClamp(player.y, player.r);
   cam.x = d.c ? d.c.x : player.x;
   cam.y = d.c ? d.c.y : player.y;
 
   for (const a of (d.e || [])){
     const T = TYPES[a[0]];
     if (!T) continue;            // unknown type from an older build — skip it
-    const e = { kind:a[0], T, x:a[1], y:a[2], vx:a[3], vy:a[4], r:T.r,
+    const e = { kind:a[0], T, x:arenaClamp(a[1], T.r), y:arenaClamp(a[2], T.r),
+      vx:a[3], vy:a[4], r:T.r,
       hp:a[5], max:a[6], spd:a[7], dmg:a[8], wob:a[9], burn:a[10], burnT:a[11],
       slowT:a[12], slowV:a[13], shootT:a[14],
       atk:0, flash:0, hitT:0, spawnT:0,
@@ -1959,7 +2049,9 @@ function resumeRun(d){
     enemies.push(e);
     if (a[15]) game.boss = e;
   }
-  for (const g of (d.m || [])) gems.push({x:g[0], y:g[1], vx:0, vy:0, v:g[2], r:g[3], life:0});
+  for (const g of (d.m || []))
+    gems.push({x:arenaClamp(g[0], g[3]), y:arenaClamp(g[1], g[3]),
+               vx:0, vy:0, v:g[2], r:g[3], life:0});
 
   ZOOM = zoomTarget = calcZoom();
   syncChips(); syncHud(true);
