@@ -295,7 +295,7 @@
       <h2 id="sbTitle">TEST BUILD</h2>
       <div class="sbTop">
         <label>LEVEL<input id="sbLevel" type="number" min="1" max="200" value="1"></label>
-        <label>WAVE<input id="sbWave" type="number" min="1" max="99" value="1"></label>
+        <label>WAVE<input id="sbWave" type="number" min="1" max="9999" value="1"></label>
         <span class="sbNote" id="sbNote"></span>
       </div>
       <div class="row sbTools">
@@ -593,7 +593,7 @@ function reset(){
     state:'play', t:0, wave:1, kills:0, level:1, xp:0, need:7,
     up:{}, rerolls:3, pending:0, spawnT:0.6, shake:0, shieldT:0,
     shield:0, auraT:0, boss:null, bossT:150, waveT:0, flash:0,
-    holdT:0, bossHold:0, waveClock:0, sandbox:false
+    holdT:0, bossHold:0, waveClock:0, sandbox:false, bossNum:0
   };
   S = recalc();
   player = {
@@ -607,14 +607,31 @@ function reset(){
 /* ============================================================
    SPAWNING
    ============================================================ */
+/* Scaling is deliberately unbounded on all three axes. The old speed cap of 1.45 was the
+   real reason a run could last forever: enemies never outran the player, so a maxed build
+   could kite indefinitely. The curve below is identical to the old one until minute 14
+   (where 1 + 14*0.032 = 1.448, exactly where the cap used to bite) and then keeps
+   climbing, so eventually nothing can be outrun and you are overwhelmed however good your
+   build is. Damage gains a quadratic term for the same reason — a purely linear ramp is
+   outpaced by Plating and max-vitals stacking. */
 function diff(){
   const m = game.t / 60;
   return {
-    hp: 1 + m*0.38 + m*m*0.021,
-    dmg: 1 + m*0.11,
-    spd: Math.min(1.45, 1 + m*0.032)
+    hp:  1 + m*0.38 + m*m*0.021,
+    dmg: 1 + m*0.11 + m*m*0.0035,
+    spd: 1 + m*0.032,
+    /* Knockback resistance. Without this a maxed Stopping Power (335) flings everything
+       away on contact and the run is unkillable no matter how tanky, fast or numerous
+       the horde gets — measured surviving minute 120 at ×360 health and ×4.9 speed
+       without losing a single point of health. Scaling health and speed cannot fix that;
+       the bubble itself has to decay. */
+    kbr: 1 + m*0.05
   };
 }
+/* Cached once per frame — hurt() runs thousands of times a second. Seeded with neutral
+   values rather than diff(), which reads game.t and would throw here: this runs at parse
+   time, long before reset() creates `game`. */
+let DIFF = { hp:1, dmg:1, spd:1, kbr:1 };
 
 function typeRoll(){
   const t = game.t, pool = [];
@@ -711,10 +728,26 @@ function spawnWave(dt){
   }
 }
 
+/* Every Abomination has double the health of the one before it: #1 gets BOSS_BASE_HP,
+   #2 twice that, #3 four times, and so on without limit. Combined with the wave gate this
+   is what eventually ends a run — the doubling outruns any build long before the horde
+   itself does, and BOSS_DECAY only guarantees the boss *can* die, not that you survive
+   long enough to see it. */
+const BOSS_BASE_HP = 2200;
+const BOSS_EVERY = 10;            // waves between appearances
+
+function bossHpFor(n){ return BOSS_BASE_HP * Math.pow(2, n - 1); }
+
 function spawnBoss(){
   const [x, y] = ringPoint();
-  game.boss = spawnAt('boss', x, y);
-  banner('ABOMINATION');
+  game.bossNum = (game.bossNum || 0) + 1;
+  const b = spawnAt('boss', x, y);
+  if (b){
+    b.hp = b.max = bossHpFor(game.bossNum);
+    b.num = game.bossNum;
+  }
+  game.boss = b;
+  banner('ABOMINATION #' + game.bossNum);
 }
 
 /* ============================================================
@@ -901,7 +934,7 @@ function hurt(e, dmg, o = {}){
   e.flash = 0.09;
   if (crit) popText(e.x, e.y - e.r - 4, dmg, '#ffb545');
   if (o.kb){
-    const d = Math.hypot(o.kx, o.ky) || 1, f = o.kb / (1 + e.r/12);
+    const d = Math.hypot(o.kx, o.ky) || 1, f = o.kb / (1 + e.r/12) / DIFF.kbr;
     e.vx += o.kx/d * f; e.vy += o.ky/d * f;
   }
   if (S.slow > 0 && !o.noStatus){ e.slowT = 2; e.slowV = Math.min(0.72, S.slow); }
@@ -955,6 +988,7 @@ function hurtPlayer(amount){
    ============================================================ */
 function update(dt){
   game.t += dt;
+  DIFF = diff();          // one recompute per frame, read by hurt() and spawnAt()
 
   /* Wave / boss gate. An Abomination holds the wave: its wave cannot tick over until it
      is dead. The hold is done by pausing a separate wave clock rather than by blocking
@@ -973,7 +1007,7 @@ function update(dt){
   const w = Math.floor(game.waveClock / 30) + 1;
   if (w > game.wave){
     game.wave = w;
-    if (w % 4 === 0 && !bossAlive) spawnBoss(); else banner('WAVE ' + w);
+    if (w % BOSS_EVERY === 0 && !bossAlive) spawnBoss(); else banner('WAVE ' + w);
   }
 
   updatePlayer(dt);
@@ -1399,10 +1433,25 @@ function rollCards(n){
 }
 
 function openLevel(){
+  /* With endless scaling a long run really does exhaust every mutation, including all 99
+     Medkits. rollCards then returns nothing, and the old code opened a card screen with
+     no cards — state stuck on 'level', pending never cleared, run soft-locked. Bank the
+     level and keep playing instead. */
+  const picks = rollCards(3);
+  if (!picks.length){
+    game.pending = 0;
+    el('vLevel').classList.add('hide');
+    game.state = 'play';
+    syncPlaying();
+    last = performance.now();
+    banner('ALL MUTATIONS MAXED');
+    saveRun();
+    return;
+  }
   game.state = 'level';
   syncPlaying();
   document.getElementById('lvNum').textContent = game.level - game.pending + 1;
-  drawCards(rollCards(3));
+  drawCards(picks);
   document.getElementById('rrLeft').textContent = game.rerolls;
   document.getElementById('rerollBtn').disabled = game.rerolls <= 0;
   document.getElementById('vLevel').classList.remove('hide');
@@ -1447,10 +1496,12 @@ function choose(id){
 
 function reroll(){
   if (game.rerolls <= 0) return;
+  const picks = rollCards(3);
+  if (!picks.length) return;          // nothing left to roll into — don't burn the reroll
   game.rerolls--;
   document.getElementById('rrLeft').textContent = game.rerolls;
   document.getElementById('rerollBtn').disabled = game.rerolls <= 0;
-  drawCards(rollCards(3));
+  drawCards(picks);
 }
 
 /* ============================================================
@@ -1866,9 +1917,9 @@ function syncHud(force){
     el('bossFill').style.transform = 'scaleX(' + clamp(game.boss.hp/game.boss.max, 0, 1) + ')';
     // say why the wave counter has stopped, or it just looks broken
     const decay = BOSS_DECAY();
-    const tag = game.wave + (decay > 1.05 ? ' HELD · BLEEDING OUT ×' + decay.toFixed(1)
-                                          : ' HELD UNTIL IT DIES');
-    if (force || lastHud.bw !== tag){ el('bossName').textContent = 'ABOMINATION · WAVE ' + tag; lastHud.bw = tag; }
+    const tag = '#' + (game.boss.num || game.bossNum || 1) + ' · WAVE ' + game.wave +
+      (decay > 1.05 ? ' HELD · BLEEDING OUT ×' + decay.toFixed(1) : ' HELD UNTIL IT DIES');
+    if (force || lastHud.bw !== tag){ el('bossName').textContent = 'ABOMINATION ' + tag; lastHud.bw = tag; }
   } else {
     bw.style.display = 'none';
     if (lastHud.bw !== undefined){ el('bossName').textContent = 'ABOMINATION'; lastHud.bw = undefined; }
@@ -2022,7 +2073,8 @@ function saveRun(){
       g:{ t:game.t, wave:game.wave, kills:game.kills, level:game.level, xp:game.xp,
           need:game.need, up:game.up, rerolls:game.rerolls, pending:game.pending,
           spawnT:game.spawnT, shield:game.shield, shieldT:game.shieldT, bossT:game.bossT,
-          holdT:game.holdT || 0, bossHold:game.bossHold || 0, waveClock:game.waveClock || 0 },
+          holdT:game.holdT || 0, bossHold:game.bossHold || 0, waveClock:game.waveClock || 0,
+          bossNum:game.bossNum || 0 },
       p:{ x:r1(player.x), y:r1(player.y), vx:r1(player.vx), vy:r1(player.vy),
           hp:r1(player.hp), aim:player.aim, dashCd:player.dashCd, orbA:player.orbA },
       c:{ x:r1(cam.x), y:r1(cam.y) },
@@ -2080,7 +2132,7 @@ function resumeRun(d){
       // leapers resume idle rather than mid-air: a saved leap has no honest telegraph
       lp: T.leaper ? { ph:'idle', t:rnd(2.2, 0.9), tx:0, ty:0 } : null };
     enemies.push(e);
-    if (a[15]) game.boss = e;
+    if (a[15]){ game.boss = e; e.num = game.bossNum || 1; }   // restore its appearance number
   }
   for (const g of (d.m || []))
     gems.push({x:arenaClamp(g[0], g[3]), y:arenaClamp(g[1], g[3]),
@@ -2177,7 +2229,7 @@ function applySandbox(cfg){
   game.need = Math.floor(4 + game.level*2 + Math.pow(game.level, 1.9));
   game.xp = 0;
   game.pending = 0;
-  const w = clamp(cfg.wave | 0, 1, 99);
+  const w = clamp(cfg.wave | 0, 1, 9999);
   game.wave = w;
   game.waveClock = waveToTime(w);
   game.t = waveToTime(w);
@@ -2245,17 +2297,22 @@ function sandboxRender(){
     '<div><span>CRIT</span><b>' + Math.round(s.crit*100) + '%</b></div>' +
     '<div><span>PICKS</span><b>' + picked + '</b></div>';
 
-  const w = clamp(el('sbWave').value | 0, 1, 99);
-  const d = { m: waveToTime(w)/60 };
+  const w = clamp(el("sbWave").value | 0, 1, 9999);
+  const m = waveToTime(w)/60;
+  // how many Abominations have already been beaten by this wave sets the next one's HP
+  const bossN = Math.floor(w / BOSS_EVERY) + 1;
   el('sbNote').innerHTML = 'Wave ' + w + ' = <b>' + fmt(waveToTime(w)) +
-    '</b> on the clock · enemies at <b>×' + (1 + d.m*0.38 + d.m*d.m*0.021).toFixed(1) +
-    '</b> health' + (w >= 4 && w % 4 === 0 ? ' · Abomination wave' : '');
+    '</b> · enemies <b>×' + (1 + m*0.38 + m*m*0.021).toFixed(1) + '</b> health, <b>×' +
+    (1 + m*0.11 + m*m*0.0035).toFixed(1) + '</b> damage, <b>×' + (1 + m*0.032).toFixed(2) +
+    '</b> speed<br>Next Abomination is <b>#' + bossN + '</b> at <b>' +
+    Math.round(bossHpFor(bossN)).toLocaleString() + '</b> HP' +
+    (w % BOSS_EVERY === 0 ? ' · this IS an Abomination wave' : '');
 }
 
 function openSandbox(live){
   sandboxLive = !!live;
   sandboxCfg.level = clamp(sandboxCfg.level | 0, 1, 200);
-  sandboxCfg.wave = clamp(sandboxCfg.wave | 0, 1, 99);
+  sandboxCfg.wave = clamp(sandboxCfg.wave | 0, 1, 9999);
   el('sbLevel').value = sandboxCfg.level;
   el('sbWave').value = sandboxCfg.wave;
   el('sbTitle').textContent = live ? 'EDIT BUILD' : 'TEST BUILD';
@@ -2277,7 +2334,7 @@ function closeSandbox(){
 
 function readSandboxInputs(){
   sandboxCfg.level = clamp(el('sbLevel').value | 0, 1, 200);
-  sandboxCfg.wave  = clamp(el('sbWave').value | 0, 1, 99);
+  sandboxCfg.wave  = clamp(el("sbWave").value | 0, 1, 9999);
 }
 
 function buildSandboxPanel(){
