@@ -436,6 +436,14 @@ const RARITY_W = { common:100, rare:44, epic:19, legendary:6.5 };
 /* ============================================================
    ENEMY TYPES
    ============================================================ */
+/* Anti-deadlock for the boss wave gate: damage taken ramps once a fight drags on. */
+/* Grace stays at 40s so a normal fight (14-53s in testing) is untouched; past that the
+   ramp is steep because chaff absorbs most shots, making effective DPS against a boss
+   roughly a quarter of nominal. */
+const BOSS_GRACE = 40, BOSS_RAMP = 0.08, BOSS_DECAY_MAX = 8;
+const BOSS_DECAY = () =>
+  Math.min(BOSS_DECAY_MAX, 1 + Math.max(0, (game.bossHold || 0) - BOSS_GRACE) * BOSS_RAMP);
+
 const LEAP_TELEGRAPH = 0.7;   // wind-up you get to react to
 const LEAP_SPEED = 620;
 const LEAP_RECOVER = 0.6;     // exposed window after landing
@@ -482,7 +490,8 @@ function reset(){
   game = {
     state:'play', t:0, wave:1, kills:0, level:1, xp:0, need:7,
     up:{}, rerolls:3, pending:0, spawnT:0.6, shake:0, shieldT:0,
-    shield:0, auraT:0, boss:null, bossT:150, waveT:0, flash:0
+    shield:0, auraT:0, boss:null, bossT:150, waveT:0, flash:0,
+    holdT:0, bossHold:0, waveClock:0
   };
   S = recalc();
   player = {
@@ -515,22 +524,43 @@ function typeRoll(){
   if (t > 175) pool.push(['spitter', 30]);
   if (t > 225) pool.push(['bloater', 28]);
   if (t > 270) pool.push(['screamer', 9]);
-  let tot = 0; for (const p of pool) tot += p[1];
+
+  // One pass for all live counts, then drop anything already at its concurrent cap so
+  // its weight redistributes across the remaining types instead of being wasted.
+  const counts = {};
+  for (const e of enemies) if (!e.dead) counts[e.kind] = (counts[e.kind] || 0) + 1;
+  const avail = pool.filter(p => !atCap(p[0], counts));
+  const use = avail.length ? avail : [['walker', 1]];
+
+  let tot = 0; for (const p of use) tot += p[1];
   let r = Math.random() * tot;
-  for (const p of pool){ r -= p[1]; if (r <= 0) return p[0]; }
+  for (const p of use){ r -= p[1]; if (r <= 0) return p[0]; }
   return 'walker';
 }
 
 const ENEMY_CAP = IS_TOUCH ? 170 : 260;
-const SCREAMER_MAX = 2;   // their rage buff stacks on the same horde — hard cap the count
+
+/* How many of each heavy type may exist AT ONCE. Without this the weighted roll keeps
+   producing brutes while your existing brutes are still alive, so they pile up faster
+   than any build can clear them. Chaff (walker/runner/crawler) stays uncapped — it is
+   what the enemy budget is meant to be spent on. */
+const KIND_CAP = { brute:4, bloater:3, spitter:5, leaper:5, screamer:2 };
+
 function countKind(kind){
   let n = 0;
   for (const e of enemies) if (e.kind === kind && !e.dead) n++;
   return n;
 }
+function atCap(kind, counts){
+  const cap = KIND_CAP[kind];
+  if (cap === undefined) return false;
+  return (counts ? (counts[kind] || 0) : countKind(kind)) >= cap;
+}
+
 function spawnAt(kind, x, y){
   if (enemies.length > ENEMY_CAP && kind !== 'boss') return;
-  if (kind === 'screamer' && countKind('screamer') >= SCREAMER_MAX) kind = 'runner';
+  // safety net for direct calls (boss adds, scream bursts, tests) — the roll filters too
+  if (atCap(kind)) kind = 'runner';
   const T = TYPES[kind], d = diff();
   const e = {
     kind, T, x, y, vx:0, vy:0, r:T.r,
@@ -669,6 +699,16 @@ function nearest(x, y, maxD, skip){
 /* Default auto-aim is nearest. Threat Assessment swaps it for a weighted score, which is
    a genuine trade: the things that matter die first, but chaff lives longer. */
 function bestTarget(x, y, maxD){
+  /* The wave cannot advance until the Abomination dies, so the main gun must be able to
+     engage it. With a full field, nearest-aim never once targeted the boss — it sat at
+     100% HP for 335s, which is the real deadlock, not low DPS. When a boss is in range it
+     is the objective, so it gets the main gun. Drones still use nearest() and keep
+     clearing chaff, so focusing the boss still costs you crowd control. */
+  const b = game.boss;
+  if (b && !b.dead){
+    const bx = b.x - x, by = b.y - y;
+    if (bx*bx + by*by <= maxD*maxD) return b;
+  }
   if (!S.threat) return nearest(x, y, maxD);
   let best = null, bs = -Infinity;
   for (const e of near(x, y, maxD)){
@@ -717,6 +757,11 @@ function hurt(e, dmg, o = {}){
   if (e.dead) return;
   if (e.T.elite) dmg *= S.eliteDmg;
   if (e.lp && e.lp.ph === 'recover') dmg *= 1.5;   // dodging a leap earns the opening
+  // The wave cannot advance until the Abomination dies, so an unkillable one would
+  // deadlock the run permanently. It bleeds out: after 40s it takes steadily more
+  // damage, which guarantees the fight terminates without softening a normal encounter
+  // (testing killed it in 14-53s).
+  if (e.T.boss) dmg *= BOSS_DECAY();
   let crit = false;
   if (!o.noCrit && Math.random() < S.crit){ crit = true; dmg *= S.critMult; }
   dmg = Math.round(dmg);
@@ -778,11 +823,24 @@ function hurtPlayer(amount){
 function update(dt){
   game.t += dt;
 
-  // wave / boss timers
-  const w = Math.floor(game.t / 30) + 1;
-  if (w !== game.wave){
+  /* Wave / boss gate. An Abomination holds the wave: its wave cannot tick over until it
+     is dead. The hold is done by pausing a separate wave clock rather than by blocking
+     the comparison, so waves resume exactly where they stopped instead of jumping ahead
+     by however long the fight took.
+     Note diff() deliberately still runs on real time — stalling the boss gets steadily
+     more dangerous, so the gate creates urgency instead of a safe farming spot. */
+  const bossAlive = !!(game.boss && !game.boss.dead);
+  if (bossAlive){ game.holdT += dt; game.bossHold += dt; }
+  else { game.bossHold = 0; game.waveClock += dt; }   // clock only runs when not held
+
+  /* Derive the wave from its own clock, never from (t - holdT). Subtracting two growing
+     floats drifts, which let the wave tick BACKWARDS (21 -> 20); landing back on a
+     multiple of 4 then re-fired spawnBoss() every few frames. Guard on `w > game.wave`
+     as well so the wave can only ever move forward. */
+  const w = Math.floor(game.waveClock / 30) + 1;
+  if (w > game.wave){
     game.wave = w;
-    if (w % 4 === 0 && !game.boss) spawnBoss(); else banner('WAVE ' + w);
+    if (w % 4 === 0 && !bossAlive) spawnBoss(); else banner('WAVE ' + w);
   }
 
   updatePlayer(dt);
@@ -1570,7 +1628,15 @@ function syncHud(force){
   if (game.boss && !game.boss.dead){
     bw.style.display = 'block';
     el('bossFill').style.transform = 'scaleX(' + clamp(game.boss.hp/game.boss.max, 0, 1) + ')';
-  } else bw.style.display = 'none';
+    // say why the wave counter has stopped, or it just looks broken
+    const decay = BOSS_DECAY();
+    const tag = game.wave + (decay > 1.05 ? ' HELD · BLEEDING OUT ×' + decay.toFixed(1)
+                                          : ' HELD UNTIL IT DIES');
+    if (force || lastHud.bw !== tag){ el('bossName').textContent = 'ABOMINATION · WAVE ' + tag; lastHud.bw = tag; }
+  } else {
+    bw.style.display = 'none';
+    if (lastHud.bw !== undefined){ el('bossName').textContent = 'ABOMINATION'; lastHud.bw = undefined; }
+  }
 
   if (IS_TOUCH){
     const rdy = player.dashCd <= 0;
@@ -1700,7 +1766,8 @@ function saveRun(){
       v:1, at:Date.now(),
       g:{ t:game.t, wave:game.wave, kills:game.kills, level:game.level, xp:game.xp,
           need:game.need, up:game.up, rerolls:game.rerolls, pending:game.pending,
-          spawnT:game.spawnT, shield:game.shield, shieldT:game.shieldT, bossT:game.bossT },
+          spawnT:game.spawnT, shield:game.shield, shieldT:game.shieldT, bossT:game.bossT,
+          holdT:game.holdT || 0, bossHold:game.bossHold || 0, waveClock:game.waveClock || 0 },
       p:{ x:r1(player.x), y:r1(player.y), vx:r1(player.vx), vy:r1(player.vy),
           hp:r1(player.hp), aim:player.aim, dashCd:player.dashCd, orbA:player.orbA },
       c:{ x:r1(cam.x), y:r1(cam.y) },
@@ -1731,6 +1798,10 @@ function clearRun(){ try { localStorage.removeItem(SAVE_KEY); } catch(e){} }
 function resumeRun(d){
   reset();                       // build the structures, then overwrite them
   Object.assign(game, d.g);
+  /* Saves written before waveClock existed only carry t/holdT, so derive it. Test the
+     SAVE, not the live object — reset() has already initialised game.waveClock to 0, so
+     checking game here would never fire and would silently reset the player to wave 1. */
+  if (typeof d.g.waveClock !== 'number') game.waveClock = Math.max(0, game.t - (game.holdT || 0));
   S = recalc();
   Object.assign(player, d.p);
   player.hp = Math.min(player.hp, S.maxHp);
