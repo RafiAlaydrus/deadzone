@@ -1436,23 +1436,36 @@ function drawTelegraphs(){
     const L = e.lp;
     if (!L || L.ph !== 'crouch' || e.dead) continue;
     const k = 1 - L.t/LEAP_TELEGRAPH;          // 0 -> 1 across the wind-up
-    const pulse = 0.55 + Math.sin(game.t*26)*0.2;
+    const pulse = 0.6 + Math.sin(game.t*26)*0.2;
+    const R = 30;
     ctx.save();
-    ctx.strokeStyle = 'rgba(255,209,102,' + (0.30 + k*0.45) + ')';
-    ctx.lineWidth = (1.6 + k*1.6)/ZOOM;
-    ctx.setLineDash([9/ZOOM, 7/ZOOM]);
-    ctx.lineDashOffset = -game.t*40;
-    ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(L.tx, L.ty); ctx.stroke();
+    ctx.lineCap = 'round';
+
+    /* Drawn twice: a dark halo underneath, then a white core on top. Amber alone got lost
+       among bloaters and runners, which share that hue. Enemies are solid filled blobs,
+       so a thin white stroke with its own dark separation can never be mistaken for one
+       regardless of what it crosses. */
+    const line = (col, w, dash) => {
+      ctx.strokeStyle = col; ctx.lineWidth = w/ZOOM;
+      ctx.setLineDash(dash ? [9/ZOOM, 7/ZOOM] : []);
+      ctx.lineDashOffset = -game.t*40;
+      ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(L.tx, L.ty); ctx.stroke();
+    };
+    line('rgba(0,0,0,0.6)', 4.6 + k*1.8, true);
+    line('rgba(255,255,255,' + (0.55 + k*0.45) + ')', 1.6 + k*1.4, true);
     ctx.setLineDash([]);
 
-    const R = 30;
-    ctx.strokeStyle = 'rgba(255,209,102,' + pulse + ')';
-    ctx.lineWidth = 2/ZOOM;
-    ctx.beginPath(); ctx.arc(L.tx, L.ty, R, 0, TAU); ctx.stroke();
+    const ring = (col, w, r) => {
+      ctx.strokeStyle = col; ctx.lineWidth = w/ZOOM;
+      ctx.beginPath(); ctx.arc(L.tx, L.ty, r, 0, TAU); ctx.stroke();
+    };
+    ring('rgba(0,0,0,0.6)', 5, R);
+    ring('rgba(255,255,255,' + pulse + ')', 2, R);
     // ring fills as the leap approaches — a readable countdown
-    ctx.fillStyle = 'rgba(255,209,102,0.18)';
+    ctx.fillStyle = 'rgba(255,255,255,0.20)';
     ctx.beginPath(); ctx.moveTo(L.tx, L.ty);
     ctx.arc(L.tx, L.ty, R, -Math.PI/2, -Math.PI/2 + TAU*k); ctx.closePath(); ctx.fill();
+    ctx.lineCap = 'butt';
     ctx.restore();
   }
 }
@@ -1472,8 +1485,11 @@ function drawEnemies(){
       else if (e.lp.ph === 'air') ctx.scale(0.82, 1.3);
       else if (e.lp.ph === 'recover') ctx.scale(1.18, 0.84);
     }
-    const body = e.flash > 0 ? '#ffffff'
-      : (e.slowT > 0 ? '#8fd3ff' : (e.rage > 0 ? '#ff8a6a' : T.col));
+    /* Rage deliberately does NOT recolour the body. Tinting it salmon both collided with
+       bloater orange and, worse, destroyed type identification — an enraged brute stopped
+       looking like a brute, so you could not tell what was about to hit you. Rage is
+       marked with a ring instead, leaving T.col to say what the enemy is. */
+    const body = e.flash > 0 ? '#ffffff' : (e.slowT > 0 ? '#8fd3ff' : T.col);
 
     ctx.fillStyle = T.dark;
     ctx.beginPath(); ctx.ellipse(0, 3, e.r*0.95, e.r*1.12, 0, 0, TAU); ctx.fill();
@@ -1504,11 +1520,17 @@ function drawEnemies(){
       ctx.globalAlpha = 0.5; ctx.fillStyle = '#ff8a3d';
       ctx.beginPath(); ctx.arc(0, 0, e.r*1.15, 0, TAU); ctx.fill();
     }
-    // Enraged reads hot-orange, NOT the screamer's magenta — with a dozen buffed enemies
-    // on screen, sharing a colour makes the screamer itself impossible to pick out.
+    /* Enraged: a pulsing pure-red ring over a dark separator ring. Pure red rather than
+       the previous orange, which sat right on top of bloater colour; and not the
+       screamer's magenta, or a dozen buffed enemies make the screamer itself impossible
+       to pick out. The dark under-ring keeps it readable over any body colour. */
     if (e.rage > 0){
-      ctx.globalAlpha = 0.8; ctx.strokeStyle = '#ff6a3d'; ctx.lineWidth = 1.5/ZOOM;
-      ctx.beginPath(); ctx.arc(0, 0, e.r*1.3, 0, TAU); ctx.stroke();
+      const p = 0.6 + Math.sin(game.t*10 + e.wob)*0.3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 3.4/ZOOM;
+      ctx.beginPath(); ctx.arc(0, 0, e.r*1.34, 0, TAU); ctx.stroke();
+      ctx.globalAlpha = p;
+      ctx.strokeStyle = '#ff2020'; ctx.lineWidth = 1.8/ZOOM;
+      ctx.beginPath(); ctx.arc(0, 0, e.r*1.34, 0, TAU); ctx.stroke();
       ctx.globalAlpha = 1;
     }
     ctx.restore();
