@@ -699,17 +699,19 @@ function nearest(x, y, maxD, skip){
 /* Default auto-aim is nearest. Threat Assessment swaps it for a weighted score, which is
    a genuine trade: the things that matter die first, but chaff lives longer. */
 function bestTarget(x, y, maxD){
-  /* The wave cannot advance until the Abomination dies, so the main gun must be able to
-     engage it. With a full field, nearest-aim never once targeted the boss — it sat at
-     100% HP for 335s, which is the real deadlock, not low DPS. When a boss is in range it
-     is the objective, so it gets the main gun. Drones still use nearest() and keep
-     clearing chaff, so focusing the boss still costs you crowd control. */
+  /* The wave cannot advance until the Abomination dies, so the main gun has to be able to
+     engage it — with a full field, nearest-aim never once targeted the boss (0 hits in
+     335s), which is the real deadlock rather than low DPS.
+
+     Plain nearest-aim has no ranking to fall back on, so it hands the boss the gun
+     outright. Threat Assessment does NOT short-circuit: the boss competes on score like
+     everything else, so a Screamer can still out-rank it. Short-circuiting here silently
+     disabled the upgrade during boss waves, which is exactly when a Screamer hurts most. */
   const b = game.boss;
-  if (b && !b.dead){
-    const bx = b.x - x, by = b.y - y;
-    if (bx*bx + by*by <= maxD*maxD) return b;
-  }
-  if (!S.threat) return nearest(x, y, maxD);
+  const bossInRange = !!(b && !b.dead &&
+    (b.x - x)*(b.x - x) + (b.y - y)*(b.y - y) <= maxD*maxD);
+
+  if (!S.threat) return bossInRange ? b : nearest(x, y, maxD);
   let best = null, bs = -Infinity;
   for (const e of near(x, y, maxD)){
     if (e.dead) continue;
