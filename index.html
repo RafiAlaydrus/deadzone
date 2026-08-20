@@ -328,8 +328,11 @@
     <div class="panel" style="text-align:center">
       <div class="kicker">SIGNAL HELD</div>
       <h2>PAUSED</h2>
-      <div style="height:18px"></div>
-      <button class="btn" id="resumeBtn">RESUME</button>
+      <p class="sub" id="pauseNote"></p>
+      <div class="row" style="justify-content:center">
+        <button class="btn" id="resumeBtn">RESUME</button>
+        <button class="btn ghost" id="lobbyBtn">LOBBY</button>
+      </div>
     </div>
   </div>
 
@@ -345,7 +348,10 @@
         <div><span>BEST TIME</span><b id="dBest">0:00</b></div>
       </div>
       <div id="dBuild" class="sub" style="margin-top:0"></div>
-      <button class="btn" id="againBtn">REDEPLOY</button>
+      <div class="row">
+        <button class="btn" id="againBtn">REDEPLOY</button>
+        <button class="btn ghost" id="deadLobbyBtn">LOBBY</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1999,12 +2005,33 @@ function togglePause(){
   if (game.state === 'play'){
     game.state = 'pause'; el('vPause').classList.remove('hide'); keepAwake(false);
     saveRun();
+    // say plainly whether leaving costs anything — the answer differs by mode
+    el('pauseNote').innerHTML = game.sandbox
+      ? 'Sandbox run — leaving discards it. Your real run is untouched.'
+      : 'Progress saved. You can go to the lobby, play sandbox, and continue this run later.';
   } else if (game.state === 'pause'){
     game.state = 'play'; el('vPause').classList.add('hide');
     last = performance.now(); keepAwake(true);
   }
   syncPlaying();
 }
+/* Back to the start screen, which doubles as the lobby: CONTINUE / DEPLOY / SANDBOX.
+   A normal run is written to storage on the way out, so you can duck into the sandbox and
+   pick the real run back up afterwards. A sandbox run saves nothing — saveRun() already
+   early-returns on game.sandbox — so switching modes can never cost you real progress.
+   Order matters: persist before reset() clears the in-memory field. */
+function toLobby(){
+  saveRun();
+  keepAwake(false);
+  reset();
+  game.state = 'menu';
+  exitSandboxUI();
+  for (const v of ['vPause','vLevel','vDead','vSandbox']) el(v).classList.add('hide');
+  el('vStart').classList.remove('hide');
+  syncPlaying();
+  offerResume();
+}
+
 /* touch controls are only shown when no overlay is up */
 function syncPlaying(){
   const playing = !!game && game.state === 'play';
@@ -2523,6 +2550,8 @@ el('continueBtn').onclick = () => { const d = loadRun(); if (d) resumeRun(d); el
 // into a real run — and still never clears the stored run.
 el('againBtn').onclick = () => { if (game.sandbox) startSandbox(sandboxCfg); else start(); };
 el('resumeBtn').onclick = togglePause;
+el('lobbyBtn').onclick = toLobby;
+el('deadLobbyBtn').onclick = toLobby;
 el('rerollBtn').onclick = reroll;
 
 /* ---------- sandbox wiring ---------- */
