@@ -66,11 +66,9 @@
   #bossFill{background:linear-gradient(90deg,#7a0d24,var(--hot))}
   #bossName{font-size:9px;letter-spacing:.24em;color:var(--hot);margin-bottom:3px}
 
-  #chips{position:absolute;left:calc(12px + env(safe-area-inset-left));bottom:calc(12px + env(safe-area-inset-bottom));
-    display:flex;flex-wrap:wrap;gap:4px;max-width:44vw;align-content:flex-end}
-  .chip{display:flex;align-items:center;gap:3px;border:1px solid var(--line);background:#0a1013cc;padding:2px 5px;font-size:10px;color:var(--mute)}
-  .chip u{text-decoration:none;color:var(--bone);font-size:11px}
-  .chip s{text-decoration:none;color:var(--phos);font-size:9px}
+  /* The upgrade chip strip was removed: a long run stacks 30+ of them and they blanket
+     the lower half of the screen, hiding the thing you actually need to see. The full
+     build is still listed on the death screen. */
 
   #wave{position:absolute;left:50%;top:26%;transform:translateX(-50%);font-size:min(9vw,58px);letter-spacing:.3em;
     color:#fff;opacity:0;text-shadow:0 0 26px #9dff5c66;white-space:nowrap}
@@ -148,22 +146,10 @@
   body.touch .bars,body.touch .meta{padding-right:52px}
   /* sandbox adds a second top-right button, so the bars need room for both */
   body.sandboxing .bars,body.sandboxing .meta{padding-right:104px}
-  /* the fixed stick occupies the bottom-left corner — lift the upgrade chips above it */
-  body.touch #chips{bottom:calc(24px + env(safe-area-inset-bottom) + 132px);max-width:calc(100vw - 130px)}
-  /* Landscape has no vertical room to stack chips above the stick — put them beside it. */
-  @media (max-height:460px){
-    body.touch #chips{
-      bottom:calc(12px + env(safe-area-inset-bottom));
-      left:calc(env(safe-area-inset-left) + 150px);
-      max-width:calc(100vw - 150px - 120px - env(safe-area-inset-left) - env(safe-area-inset-right));
-    }
-  }
   @media (max-width:620px){
     #cards{grid-template-columns:1fr;gap:7px;margin:12px 0 12px}
     .card{padding:13px 12px}.card .ic{font-size:19px;margin-bottom:5px;display:inline-block;margin-right:8px}
     .card .nm{display:inline-block}.card .ds{margin-top:5px}
-    /* keep chips clear of the DASH pad */
-    #chips{max-width:calc(100vw - 130px)}
     .sub{font-size:11px;line-height:1.75;margin:10px 0 14px}
     .stats{margin:12px 0}.stats b{font-size:18px}.stats div{padding:9px 11px}
     .meta{gap:10px;font-size:10px}
@@ -209,8 +195,8 @@
   #sbStats b{font-size:15px}
   #sbToggle{position:absolute;right:calc(66px + env(safe-area-inset-right));top:calc(14px + env(safe-area-inset-top));
     width:44px;height:44px;border:1px solid #2e2350;background:#140f24cc;color:var(--violet);
-    display:none;align-items:center;justify-content:center;font:inherit;font-size:15px;
-    pointer-events:auto;z-index:4;touch-action:manipulation}
+    display:none;align-items:center;justify-content:center;font:inherit;font-size:24px;
+    line-height:1;pointer-events:auto;z-index:4;touch-action:manipulation}
   body.sandboxing #sbToggle{display:flex}
   #sbPanel{position:absolute;right:calc(12px + env(safe-area-inset-right));top:calc(64px + env(safe-area-inset-top));
     width:min(224px,52vw);border:1px solid #2e2350;background:#0a0d14f2;padding:8px;
@@ -252,7 +238,6 @@
     <div id="sbBadge" class="hide">SANDBOX</div>
     <div id="bossWrap"><div id="bossName">ABOMINATION</div><div class="bar"><i id="bossFill"></i></div></div>
     <div id="wave"></div>
-    <div id="chips"></div>
   </div>
 
   <button id="touchDash">DASH</button>
@@ -767,7 +752,13 @@ function popText(x, y, txt, col){
 }
 function banner(txt){
   const el = document.getElementById('wave');
-  el.textContent = txt; el.classList.remove('go');
+  el.textContent = txt;
+  /* Shrink to fit. The banner is nowrap with 0.3em letter-spacing, so long strings like
+     "ABOMINATION DOWN" or "ABOMINATION #10" ran clean off a phone screen at the fixed
+     9vw size. Monospace glyphs are ~0.6em wide, plus the spacing, so ~0.9em per char. */
+  const px = (W * 0.92) / (Math.max(1, txt.length) * 0.9);
+  el.style.fontSize = clamp(px, 13, 58).toFixed(1) + 'px';
+  el.classList.remove('go');
   void el.offsetWidth; el.classList.add('go');
 }
 function boom(x, y, r, dmg, col = '#ffb545'){
@@ -1936,20 +1927,11 @@ function syncHud(force){
   }
 }
 
-function syncChips(){
-  const c = el('chips');
-  c.innerHTML = '';
-  const ids = Object.keys(game.up).sort((a,b) => game.up[b] - game.up[a]);
-  for (const id of ids){
-    if (id === 'medkit') continue;
-    const u = UP_BY_ID[id];
-    const d = document.createElement('div');
-    d.className = 'chip';
-    d.innerHTML = '<u>' + u.ic + '</u><s>' + game.up[id] + '</s>';
-    d.title = u.name;
-    c.appendChild(d);
-  }
-}
+/* The on-screen chip strip is gone — kept as a no-op so the several call sites that fire
+   after a pick, a resume or a sandbox apply stay meaningful if a build readout ever
+   returns (a pause-screen list would be the natural home). The death screen still prints
+   the full build via #dBuild. */
+function syncChips(){}
 
 /* ============================================================
    FLOW
