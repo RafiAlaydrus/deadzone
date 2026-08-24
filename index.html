@@ -679,6 +679,28 @@ const COLLAPSE_GRACE = 5;           // seconds before it begins closing
 const COLLAPSE_RATE = 16;           // units/sec
 const COLLAPSE_TICK = 0.4;          // damage interval while outside
 
+/* ---------- weeper ----------
+   Poisons the ground: drips as it walks and bursts into a wide pool where it dies. Acid
+   slows and ticks damage while you stand in it, so it is a zoning enemy — the threat is
+   the ground it has already covered, not the body.
+
+   The rule this enemy was blocked on for three sessions: being slowed while a Leaper
+   telegraphs is unavoidable damage UNLESS the escape stays available. dash() is gated
+   only on its own cooldown and never on being impaired (see the Warden), which is what
+   makes acid survivable next to a leap. Do not add an impairment check to dash.
+
+   Pools are player-only, like Herald zones — acid that cleared the horde for free would
+   make the Weeper a gift rather than a threat. */
+const WEEPER_DRIP = 1.7;            // seconds between drips while walking
+const WEEPER_POOL_R = 44;           // a drip
+const WEEPER_DEATH_R = 84;          // what it leaves behind when killed
+const WEEPER_POOL_LIFE = 5;
+const WEEPER_DEATH_LIFE = 8;
+const WEEPER_SLOW = 0.36;
+const WEEPER_TICK = 0.5;            // damage interval while standing in it
+const WEEPER_ACID = 5;              // per tick, before armor
+const POOL_CAP = 22;
+
 const LEAP_TELEGRAPH = 0.7;   // wind-up you get to react to
 const LEAP_SPEED = 620;
 const LEAP_RECOVER = 0.6;     // exposed window after landing
@@ -692,6 +714,10 @@ const TYPES = {
   brute:   {hp:150, spd:38,  dmg:24, r:23, xp:6,  col:'#b58cff', dark:'#3a2a5c', elite:true, name:'brute'},
   // Crouches, telegraphs, then leaps to where you WILL be — punishes a constant orbit
   leaper:  {hp:26,  spd:74,  dmg:17, r:11, xp:2,  col:'#ffd166', dark:'#5c4413', leaper:true, name:'leaper'},
+  // Drips acid as it walks and bursts on death. Slow and soft — what it costs you is
+  // ground, not health. Toxic yellow-green: bright enough to separate from the walker's
+  // muted forest and far enough from the player's phosphor to never be mistaken for XP.
+  weeper:  {hp:44,  spd:44,  dmg:12, r:16, xp:3,  col:'#c9e33d', dark:'#3d4a0c', weeper:true, name:'weeper'},
   // Never attacks. Sits outside your scan ring and enrages the horde. Auto-aim will not
   // pick it, so you have to walk at it. Marked elite for the health bar readability.
   screamer:{hp:64,  spd:62,  dmg:8,  r:15, xp:5,  col:'#ff5cf0', dark:'#4d1450', screamer:true, elite:true, name:'screamer'},
@@ -719,6 +745,9 @@ let player, cam, game, best = { time:0, wave:1, level:1, kills:0 };
 const enemies = [], bullets = [], ebullets = [], gems = [], parts = [], texts = [], zaps = [], blasts = [];
 // herald ground markers. Short-lived like blasts, so deliberately never saved.
 const zones = [];
+// weeper acid. Also unsaved: a pool outlives its weeper by seconds, and resuming into
+// ground you cannot see the cause of is worse than resuming onto clean floor.
+const pools = [];
 const keys = new Set();
 let currentPicks = [];
 
@@ -737,12 +766,13 @@ function recalc(){
 function reset(){
   enemies.length = bullets.length = ebullets.length = gems.length = 0;
   parts.length = texts.length = zaps.length = blasts.length = zones.length = 0;
+  pools.length = 0;
   game = {
     state:'play', t:0, wave:1, kills:0, level:1, xp:0, need:7,
     up:{}, rerolls:3, pending:0, spawnT:0.6, shake:0, shieldT:0,
     shield:0, auraT:0, boss:null, bossT:150, waveT:0, flash:0,
     holdT:0, bossHold:0, waveClock:0, sandbox:false, bossNum:0, bossMax:0,
-    collapseArmed:false, collapseT:0,
+    collapseArmed:false, collapseT:0, acidT:0,
     bossBag:[], bossLast:null,
     goldenPicks:0, goldenNow:false
   };
@@ -793,6 +823,7 @@ function typeRoll(){
   if (t > 130) pool.push(['brute', 22]);
   if (t > 150) pool.push(['leaper', 26]);
   if (t > 175) pool.push(['spitter', 30]);
+  if (t > 200) pool.push(['weeper', 22]);
   if (t > 225) pool.push(['bloater', 28]);
   if (t > 270) pool.push(['screamer', 9]);
 
@@ -815,7 +846,7 @@ const ENEMY_CAP = IS_TOUCH ? 170 : 260;
    producing brutes while your existing brutes are still alive, so they pile up faster
    than any build can clear them. Chaff (walker/runner/crawler) stays uncapped — it is
    what the enemy budget is meant to be spent on. */
-const KIND_CAP = { brute:4, bloater:3, spitter:5, leaper:5, screamer:2 };
+const KIND_CAP = { brute:4, bloater:3, spitter:5, leaper:5, screamer:2, weeper:4 };
 
 function countKind(kind){
   let n = 0;
@@ -848,6 +879,7 @@ function spawnAt(kind, x, y, ignoreCap){
     face: T.bulwark ? Math.atan2(player.y - y, player.x - x) : 0,
     tth: T.warden ? { ph:'idle', t:rnd(2.6, 1.2) } : null,
     hz:  T.herald ? rnd(3.2, 1.6) : 0,
+    wp:  T.weeper ? rnd(WEEPER_DRIP, 0.3) : 0,
     gen: 0
   };
   e.max = e.hp;
@@ -1285,6 +1317,8 @@ function kill(e){
       vx:rnd(60,-60), vy:rnd(60,-60),
       v:e.T.xp / (e.T.boss ? 3 : 1), r:e.T.boss ? 6 : e.T.elite ? 5 : 3.6, life:0});
   }
+  // what a weeper actually costs you: the ground where it fell
+  if (e.T.weeper) addPool(e.x, e.y, WEEPER_DEATH_R, WEEPER_DEATH_LIFE);
   if (e.T.boom) boom(e.x, e.y, 92, 34 + game.t/12, '#e8734f');
   else if (S.novaChance > 0 && Math.random() < S.novaChance) boom(e.x, e.y, 62, S.damage*1.6, '#9dff5c');
   if (e.T.boss){
@@ -1361,6 +1395,7 @@ function update(dt){
   buildGrid();
   updateEnemies(dt);
   updateZones(dt);
+  updatePools(dt);
   updateCollapse(dt);
   updateBullets(dt);
   updateGems(dt);
@@ -1405,9 +1440,14 @@ function updatePlayer(dt){
   // a tethered warden that has since died must not keep slowing you
   if (player.tether && player.tether.dead) player.tether = null;
 
+  /* Acid stacks multiplicatively with a Warden tether — both are escapable (dash breaks
+     the tether, feet leave the acid) and dash is gated on neither, so the worst case is
+     slow, not stuck. */
+  const acid = inAcid();
   let spd = S.moveSpeed;
   if (S.adrenaline > 0 && player.hp < S.maxHp*0.4) spd *= 1 + S.adrenaline;
   if (player.tether) spd *= 1 - WARDEN_SLOW;
+  if (acid) spd *= 1 - WEEPER_SLOW;
   if (player.dashT > 0) spd *= 3.4;
 
   player.vx += (ix*spd - player.vx) * Math.min(1, dt*16);
@@ -1436,6 +1476,16 @@ function updatePlayer(dt){
   player.inv = Math.max(0, player.inv - dt);
   player.hitT = Math.max(0, player.hitT - dt);
   if (player.dashT > 0) burst(player.x, player.y, 1, '#9dff5c', 30, 0.3, 2);
+
+  // acid burns on a fixed cadence, through hurtPlayer so armor and shields still count
+  if (acid){
+    game.acidT = (game.acidT || 0) + dt;
+    if (game.acidT >= WEEPER_TICK){
+      game.acidT = 0;
+      hurtPlayer(WEEPER_ACID * DIFF.dmg);
+      burst(player.x, player.y, 4, '#c9e33d', 150, 0.35, 2);
+    }
+  } else game.acidT = 0;
 
   if (S.regen > 0) player.hp = Math.min(S.maxHp, player.hp + S.regen*dt);
 
@@ -1570,6 +1620,13 @@ function updateEnemies(dt){
       }
       e.screamT -= dt;
       if (e.screamT <= 0){ e.screamT = SCREAM_CYCLE; scream(e); }
+    }
+
+    // weeper: leaves a trail. The drip timer runs on real time, not distance, so a
+    // weeper pinned against a wall still poisons the spot it stands on.
+    if (e.T.weeper){
+      e.wp -= dt;
+      if (e.wp <= 0){ e.wp = WEEPER_DRIP; addPool(e.x, e.y, WEEPER_POOL_R, WEEPER_POOL_LIFE); }
     }
 
     // choir: divides under fire, in place — see splitChoir for why not through kill()
@@ -1713,6 +1770,26 @@ function updateEnemies(dt){
 /* Ground markers fill, then detonate. Damage is player-only: this is the boss attacking
    you, not friendly fire that would clear its own horde for free. Routing through
    hurtPlayer means i-frames apply, so dashing through a detonation is a real out. */
+function addPool(x, y, r, life){
+  // Drop the OLDEST when full, never refuse the new one: the pool that just burst under
+  // your feet is the one that matters, and refusing it would silently disarm a death.
+  if (pools.length >= POOL_CAP) pools.shift();
+  pools.push({ x:arenaClamp(x, r), y:arenaClamp(y, r), r, t:life, max:life });
+}
+
+function updatePools(dt){
+  for (let i = pools.length - 1; i >= 0; i--){
+    pools[i].t -= dt;
+    if (pools[i].t <= 0) pools.splice(i, 1);
+  }
+}
+
+function inAcid(){
+  for (const p of pools)
+    if (Math.hypot(player.x - p.x, player.y - p.y) < p.r + player.r*0.5) return true;
+  return false;
+}
+
 function updateZones(dt){
   for (let i = zones.length - 1; i >= 0; i--){
     const z = zones[i];
@@ -2123,6 +2200,19 @@ function render(){
     ctx.strokeStyle = b.col; ctx.globalAlpha = k*0.8*al;
     ctx.lineWidth = (2 + k*3) * (b.w === undefined ? 1 : b.w);
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r*(1.15 - k*0.35), 0, TAU); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  /* Acid sits under everything — it is standing hazard, not an incoming one, and must not
+     compete with the Herald's countdown rings or a leaper's landing marker. Fades out with
+     its own life so you can read how long a patch has left. */
+  for (const p of pools){
+    const k = Math.min(1, p.t/1.2);            // only the last 1.2s visibly fades
+    ctx.globalAlpha = k;
+    ctx.fillStyle = 'rgba(150,190,30,0.17)';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
+    ctx.strokeStyle = 'rgba(190,228,70,0.5)'; ctx.lineWidth = 1.6/ZOOM;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
@@ -2796,7 +2886,8 @@ function resumeRun(d){
       /* Same call as leapers resuming idle: a saved tether or half-filled shell has no
          honest telegraph behind it, so both restart cold. Player-favourable. */
       tth: T.warden ? { ph:'idle', t:rnd(2.6, 1.2) } : null,
-      hz:  T.herald ? rnd(3.2, 1.6) : 0 };
+      hz:  T.herald ? rnd(3.2, 1.6) : 0,
+      wp:  T.weeper ? rnd(WEEPER_DRIP, 0.3) : 0 };
     enemies.push(e);
     if (a[15]){ game.boss = e; e.num = game.bossNum || 1; }   // restore its appearance number
   }
@@ -2888,7 +2979,7 @@ async function saveBest(){
 let sandboxCfg = { level:1, wave:1, up:{} };
 let sandboxLive = false;          // true when editing mid-run rather than pre-run
 
-const SB_SPAWN = ['walker','runner','crawler','spitter','bloater','brute','leaper','screamer'];
+const SB_SPAWN = ['walker','runner','crawler','spitter','bloater','brute','leaper','screamer','weeper'];
 
 /* Wave N implies a point on the difficulty curve, so set the clock to match — otherwise
    "start at wave 12" would hand you wave-12 spawn rates with minute-zero enemies and
