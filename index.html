@@ -538,6 +538,26 @@ const BOSS_DECAY = () =>
 const ARENA = 2400;
 const arenaClamp = (v, r) => clamp(v, -ARENA + r, ARENA - r);
 
+/* ---------- bulwark ----------
+   Frontal plate, and the turn rate is the whole mechanic: facing lags the bearing to the
+   player, so committing to go around drags the plate off you and opens the back.
+
+   The rate has to sit BELOW the orbital rate a player can actually achieve, or the plate
+   tracks you forever and the fight is unwinnable — precisely the failure that keeps Riot
+   parked on the roadmap. Orbital rate is speed/radius, so the pin threshold is
+   moveSpeed/BULWARK_TURN: at 0.55 a base player was hard-pinned past r 364, which sits
+   inside Long Barrel's reach and made a lazy max-range orbit 100% blocked for 115s of
+   sparks. 0.38 pushes the threshold to ~526, past almost any real engagement.
+
+   Lowering it costs far less than it looks: once you out-turn the plate at all, a naive
+   orbit is blocked for the arc's share of each lap (~33%) no matter how much you beat it
+   by. The rate only decides WHERE you get pinned, not how punishing a flank-capable
+   orbit is — so closing the distance still plainly helps, which is the trade this fight
+   is built on. */
+const BULWARK_TURN = 0.38;          // rad/s the facing may swing
+const BULWARK_ARC = Math.PI/3;      // half-angle, so 120 degrees of plate
+const BULWARK_BLOCK = 0.10;         // damage multiplier for anything striking the plate
+
 const LEAP_TELEGRAPH = 0.7;   // wind-up you get to react to
 const LEAP_SPEED = 620;
 const LEAP_RECOVER = 0.6;     // exposed window after landing
@@ -554,7 +574,11 @@ const TYPES = {
   // Never attacks. Sits outside your scan ring and enrages the horde. Auto-aim will not
   // pick it, so you have to walk at it. Marked elite for the health bar readability.
   screamer:{hp:64,  spd:62,  dmg:8,  r:15, xp:5,  col:'#ff5cf0', dark:'#4d1450', screamer:true, elite:true, name:'screamer'},
-  boss:    {hp:900, spd:47,  dmg:34, r:40, xp:70, col:'#ff3d6e', dark:'#4d0d20', boss:true, elite:true, name:'abomination'}
+  boss:    {hp:900, spd:47,  dmg:34, r:40, xp:70, col:'#ff3d6e', dark:'#4d0d20', boss:true, elite:true, name:'abomination'},
+  // Armoured front: near-immune head-on, soft from behind, too slow to keep the plate on
+  // anyone who commits to walking around it. Slower and hitting slightly softer than the
+  // Abomination — its defence is the plate, not raw numbers.
+  bulwark: {hp:900, spd:41,  dmg:30, r:42, xp:70, col:'#9fb3cc', dark:'#2c3a4d', boss:true, elite:true, bulwark:true, name:'bulwark'}
 };
 
 /* ============================================================
@@ -684,7 +708,9 @@ function spawnAt(kind, x, y, ignoreCap){
     atk:0, flash:0, burn:0, burnT:0, slowT:0, slowV:0, hitT:0, wob:rnd(TAU),
     shootT:rnd(2.5,1), spawnT:0.35,
     rage:0, screamT:rnd(5.5, 3),
-    lp: T.leaper ? { ph:'idle', t:rnd(2.2, 0.9), tx:0, ty:0 } : null
+    lp: T.leaper ? { ph:'idle', t:rnd(2.2, 0.9), tx:0, ty:0 } : null,
+    // only the bulwark reads this; it walks on already looking at you
+    face: T.bulwark ? Math.atan2(player.y - y, player.x - x) : 0
   };
   e.max = e.hp;
   enemies.push(e);
@@ -743,7 +769,7 @@ function bossHpFor(n){ return BOSS_BASE_HP * Math.pow(2, n - 1); }
    fights themselves — longer than most runs survive. The coverage guarantee is therefore
    close to worthless. The bag earns its keep by making the FIRST boss of a run a
    different one each time: variety lands across runs, not inside one. */
-const BOSS_ROSTER = ['boss'];
+const BOSS_ROSTER = ['boss', 'bulwark'];
 
 const bossLabel = kind => TYPES[kind].name.toUpperCase();
 
@@ -973,6 +999,18 @@ function hurt(e, dmg, o = {}){
   // damage, which guarantees the fight terminates without softening a normal encounter
   // (testing killed it in 14-53s).
   if (e.T.boss) dmg *= BOSS_DECAY();
+  /* Bulwark plate. Only DIRECTIONAL damage can be blocked: o.kx/o.ky is the direction of
+     travel at every call site, so the source lies at -o. Aura, chain lightning and burn
+     carry no direction and go around the plate — deliberate, because those are the builds
+     that answer this boss, and a boss with no answer is just a wall. */
+  let blockAt = null;
+  if (e.T.bulwark && o.kx !== undefined){
+    const ia = Math.atan2(-o.ky, -o.kx);
+    let a = ia - e.face;
+    while (a > Math.PI) a -= TAU;
+    while (a < -Math.PI) a += TAU;
+    if (Math.abs(a) < BULWARK_ARC){ dmg *= BULWARK_BLOCK; blockAt = ia; }
+  }
   let crit = false;
   if (!o.noCrit && Math.random() < S.crit){ crit = true; dmg *= S.critMult; }
   dmg = Math.round(dmg);
@@ -988,7 +1026,11 @@ function hurt(e, dmg, o = {}){
   if (S.lifesteal > 0 && !o.noStatus && Math.random() < S.lifesteal){
     player.hp = Math.min(S.maxHp, player.hp + 2);
   }
-  burst(e.x, e.y, crit ? 5 : 2, e.T.col, 130, 0.28, 2);
+  /* A shot that does nothing must never look like a bug: blocked hits spark off the
+     plate itself, in steel white, plainly unlike the body-coloured puff of one that landed. */
+  if (blockAt !== null)
+    burst(e.x + Math.cos(blockAt)*e.r, e.y + Math.sin(blockAt)*e.r, 4, '#dceaff', 210, 0.26, 1.9);
+  else burst(e.x, e.y, crit ? 5 : 2, e.T.col, 130, 0.28, 2);
   if (e.hp <= 0) kill(e);
 }
 
@@ -1258,6 +1300,14 @@ function updateEnemies(dt){
       }
       e.screamT -= dt;
       if (e.screamT <= 0){ e.screamT = SCREAM_CYCLE; scream(e); }
+    }
+
+    // bulwark: facing chases the bearing to the player but may only swing so fast
+    if (e.T.bulwark){
+      let turn = Math.atan2(dy, dx) - e.face;
+      while (turn > Math.PI) turn -= TAU;
+      while (turn < -Math.PI) turn += TAU;
+      e.face += clamp(turn, -BULWARK_TURN*dt, BULWARK_TURN*dt);
     }
 
     // leaper: idle -> crouch (telegraph) -> air (ballistic) -> recover (vulnerable)
@@ -1861,7 +1911,10 @@ function drawEnemies(){
     const wob = Math.sin(e.wob*2.2)*0.14;
     ctx.save();
     ctx.translate(e.x, e.y);
-    ctx.rotate(Math.atan2(e.vy, e.vx) + Math.PI/2 + wob);
+    /* The bulwark turns on its own lagging facing rather than on velocity, and skips the
+       wobble: the plate has to sit exactly where the damage check says it does. */
+    ctx.rotate(T.bulwark ? e.face + Math.PI/2
+                         : Math.atan2(e.vy, e.vx) + Math.PI/2 + wob);
 
     if (e.spawnT > 0){ ctx.globalAlpha = 1 - e.spawnT/0.35; ctx.scale(1.4 - e.spawnT, 1.4 - e.spawnT); }
     // coiling before a leap, stretched in flight — silhouette reads the state
@@ -1900,6 +1953,18 @@ function drawEnemies(){
       ctx.arc(-e.r*0.3, -e.r*0.34, e.r*0.07, 0, TAU);
       ctx.arc(e.r*0.3, -e.r*0.34, e.r*0.07, 0, TAU);
       ctx.fill();
+    }
+    /* The plate, drawn at exactly the arc the damage check uses — if the picture and the
+       rule disagree the fight is unreadable. Sized off e.r rather than divided by ZOOM:
+       it is part of the creature, so it should scale with it. */
+    if (T.bulwark){
+      const f = -Math.PI/2, R = e.r*1.3;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)'; ctx.lineWidth = e.r*0.42;
+      ctx.beginPath(); ctx.arc(0, 0, R, f - BULWARK_ARC, f + BULWARK_ARC); ctx.stroke();
+      ctx.strokeStyle = e.flash > 0 ? '#ffffff' : '#dbe7f5'; ctx.lineWidth = e.r*0.26;
+      ctx.beginPath(); ctx.arc(0, 0, R, f - BULWARK_ARC, f + BULWARK_ARC); ctx.stroke();
+      ctx.lineCap = 'butt';
     }
     if (e.burnT > 0){
       ctx.globalAlpha = 0.5; ctx.fillStyle = '#ff8a3d';
@@ -2223,7 +2288,9 @@ function saveRun(){
           e.kind, r1(e.x), r1(e.y), r1(e.vx), r1(e.vy), r1(e.hp), r1(e.max), r1(e.spd),
           // index 16 (rage) is appended, so saves written before it still load
           r1(e.dmg), r1(e.wob), r1(e.burn), r1(e.burnT), r1(e.slowT), r1(e.slowV),
-          r1(e.shootT), e === game.boss ? 1 : 0, r1(e.rage || 0) ]),
+          // index 17 (bulwark facing) appended — without it a resumed plate points
+          // somewhere the drawing does not show and blocks from the wrong side
+          r1(e.shootT), e === game.boss ? 1 : 0, r1(e.rage || 0), r1(e.face || 0) ]),
       // index 4 flags a Golden Core; without it a saved one restores as a worthless
       // 0-XP green gem and the boss reward is silently lost. Appended, so older saves load.
       m:gems.slice(0, 400).map(g => [r1(g.x), r1(g.y), g.v, g.r, g.golden ? 1 : 0])
@@ -2276,6 +2343,8 @@ function resumeRun(d){
       slowT:a[12], slowV:a[13], shootT:a[14],
       atk:0, flash:0, hitT:0, spawnT:0,
       rage:a[16] || 0, screamT:rnd(5.5, 3),
+      // saves older than index 17 have no facing — look at the player, never due east
+      face: typeof a[17] === 'number' ? a[17] : Math.atan2(player.y - a[2], player.x - a[1]),
       // leapers resume idle rather than mid-air: a saved leap has no honest telegraph
       lp: T.leaper ? { ph:'idle', t:rnd(2.2, 0.9), tx:0, ty:0 } : null };
     enemies.push(e);
@@ -2497,8 +2566,9 @@ function buildSandboxPanel(){
     const e = spawnAt(k, player.x + Math.cos(a)*r, player.y + Math.sin(a)*r, true);
     if (e) e.spawnT = 0.25;
   });
-  // draws from the bag exactly like a real boss wave does
-  add('BOSS', () => { if (!game.boss || game.boss.dead) spawnBoss(); });
+  // one button per roster entry, so a specific boss can be put on the field on demand
+  for (const k of BOSS_ROSTER)
+    add(bossLabel(k), () => { if (!game.boss || game.boss.dead) spawnBoss(k); });
 }
 
 /* ============================================================
