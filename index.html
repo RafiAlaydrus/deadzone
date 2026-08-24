@@ -558,6 +558,35 @@ const BULWARK_TURN = 0.38;          // rad/s the facing may swing
 const BULWARK_ARC = Math.PI/3;      // half-angle, so 120 degrees of plate
 const BULWARK_BLOCK = 0.10;         // damage multiplier for anything striking the plate
 
+/* ---------- warden ----------
+   Throws a tether that slows you and reels you in. DASH ALWAYS BREAKS IT, and dash is
+   never gated on being tethered — that rule is not decoration, it is the thing that keeps
+   a slow from stacking with a Leaper telegraph into unavoidable damage. Weeper's acid
+   needs the same rule when it lands.
+
+   The throw is not dodgeable once it is in range, on purpose: the wind-up is telling you
+   to have a dash ready, not to sidestep. WARDEN_HOLD is the safety valve so a player with
+   dash on cooldown is never held forever. */
+const WARDEN_RANGE = 460;
+const WARDEN_WINDUP = 0.8;          // telegraph before it latches
+const WARDEN_HOLD = 2.6;            // longest it can hold without a dash
+const WARDEN_CD = 5.5;              // between throws
+const WARDEN_SLOW = 0.38;           // movement cut while tethered
+const WARDEN_PULL = 108;            // reel speed, world units/sec
+
+/* ---------- herald ----------
+   Bombardment: never needs to touch you, it makes the floor the threat. Punishes the two
+   habits that beat everything else in this game — standing still to DPS, and holding a
+   smooth predictable orbit. One mark leads where you are actually going; the rest scatter.
+   ZONE_CAP is not optional: with 170 enemies already on screen, uncapped ground markers
+   turn the field into noise. */
+const HERALD_CYCLE = 5.5;
+const HERALD_MARKS = 6;
+const HERALD_FUSE = 1.5;            // fill time you get to walk out of it
+const HERALD_R = 86;
+const HERALD_SPREAD = 250;
+const ZONE_CAP = 14;
+
 const LEAP_TELEGRAPH = 0.7;   // wind-up you get to react to
 const LEAP_SPEED = 620;
 const LEAP_RECOVER = 0.6;     // exposed window after landing
@@ -578,7 +607,11 @@ const TYPES = {
   // Armoured front: near-immune head-on, soft from behind, too slow to keep the plate on
   // anyone who commits to walking around it. Slower and hitting slightly softer than the
   // Abomination — its defence is the plate, not raw numbers.
-  bulwark: {hp:900, spd:41,  dmg:30, r:42, xp:70, col:'#9fb3cc', dark:'#2c3a4d', boss:true, elite:true, bulwark:true, name:'bulwark'}
+  bulwark: {hp:900, spd:41,  dmg:30, r:42, xp:70, col:'#9fb3cc', dark:'#2c3a4d', boss:true, elite:true, bulwark:true, name:'bulwark'},
+  // Tethers you and reels you in. Its fight is about your dash, not your aim.
+  warden:  {hp:900, spd:44,  dmg:28, r:38, xp:70, col:'#2fb8a8', dark:'#0e4640', boss:true, elite:true, warden:true,  name:'warden'},
+  // Shells the ground. Slowest of the bosses because it never needs to reach you.
+  herald:  {hp:900, spd:36,  dmg:26, r:44, xp:70, col:'#f0a428', dark:'#5c3c06', boss:true, elite:true, herald:true,  name:'herald'}
 };
 
 /* ============================================================
@@ -587,6 +620,8 @@ const TYPES = {
 let S = { ...BASE };
 let player, cam, game, best = { time:0, wave:1, level:1, kills:0 };
 const enemies = [], bullets = [], ebullets = [], gems = [], parts = [], texts = [], zaps = [], blasts = [];
+// herald ground markers. Short-lived like blasts, so deliberately never saved.
+const zones = [];
 const keys = new Set();
 let currentPicks = [];
 
@@ -604,7 +639,7 @@ function recalc(){
 
 function reset(){
   enemies.length = bullets.length = ebullets.length = gems.length = 0;
-  parts.length = texts.length = zaps.length = blasts.length = 0;
+  parts.length = texts.length = zaps.length = blasts.length = zones.length = 0;
   game = {
     state:'play', t:0, wave:1, kills:0, level:1, xp:0, need:7,
     up:{}, rerolls:3, pending:0, spawnT:0.6, shake:0, shieldT:0,
@@ -615,7 +650,8 @@ function reset(){
   S = recalc();
   player = {
     x:0, y:0, vx:0, vy:0, r:13, hp:S.maxHp, aim:-Math.PI/2,
-    shootT:0, dashT:0, dashCd:0, inv:0, hitT:0, queue:[], orbA:0, drones:[]
+    shootT:0, dashT:0, dashCd:0, inv:0, hitT:0, queue:[], orbA:0, drones:[],
+    tether:null
   };
   cam = { x:0, y:0 };
   syncChips(); syncHud(true);
@@ -710,7 +746,9 @@ function spawnAt(kind, x, y, ignoreCap){
     rage:0, screamT:rnd(5.5, 3),
     lp: T.leaper ? { ph:'idle', t:rnd(2.2, 0.9), tx:0, ty:0 } : null,
     // only the bulwark reads this; it walks on already looking at you
-    face: T.bulwark ? Math.atan2(player.y - y, player.x - x) : 0
+    face: T.bulwark ? Math.atan2(player.y - y, player.x - x) : 0,
+    tth: T.warden ? { ph:'idle', t:rnd(2.6, 1.2) } : null,
+    hz:  T.herald ? rnd(3.2, 1.6) : 0
   };
   e.max = e.hp;
   enemies.push(e);
@@ -769,7 +807,7 @@ function bossHpFor(n){ return BOSS_BASE_HP * Math.pow(2, n - 1); }
    fights themselves — longer than most runs survive. The coverage guarantee is therefore
    close to worthless. The bag earns its keep by making the FIRST boss of a run a
    different one each time: variety lands across runs, not inside one. */
-const BOSS_ROSTER = ['boss', 'bulwark'];
+const BOSS_ROSTER = ['boss', 'bulwark', 'warden', 'herald'];
 
 const bossLabel = kind => TYPES[kind].name.toUpperCase();
 
@@ -1108,6 +1146,7 @@ function update(dt){
   spawnWave(dt);
   buildGrid();
   updateEnemies(dt);
+  updateZones(dt);
   updateBullets(dt);
   updateGems(dt);
   updateFx(dt);
@@ -1148,13 +1187,29 @@ function updatePlayer(dt){
   const m = Math.hypot(ix, iy);
   if (m > 1){ ix /= m; iy /= m; }
 
+  // a tethered warden that has since died must not keep slowing you
+  if (player.tether && player.tether.dead) player.tether = null;
+
   let spd = S.moveSpeed;
   if (S.adrenaline > 0 && player.hp < S.maxHp*0.4) spd *= 1 + S.adrenaline;
+  if (player.tether) spd *= 1 - WARDEN_SLOW;
   if (player.dashT > 0) spd *= 3.4;
 
   player.vx += (ix*spd - player.vx) * Math.min(1, dt*16);
   player.vy += (iy*spd - player.vy) * Math.min(1, dt*16);
   player.x += player.vx*dt; player.y += player.vy*dt;
+
+  /* The reel is applied to POSITION, not velocity: fed through the velocity smoothing it
+     would just be fought by the movement input and read as mush. Stop short of contact so
+     it drags you into range rather than parking you inside the boss. */
+  if (player.tether){
+    const T = player.tether;
+    const tx = T.x - player.x, ty = T.y - player.y, td = Math.hypot(tx, ty) || 1;
+    if (td > T.r + player.r + 8){
+      player.x += tx/td * WARDEN_PULL * dt;
+      player.y += ty/td * WARDEN_PULL * dt;
+    }
+  }
 
   // arena walls — kill the velocity component too, or you slide along feeling stuck
   const px = arenaClamp(player.x, player.r), py = arenaClamp(player.y, player.r);
@@ -1310,6 +1365,45 @@ function updateEnemies(dt){
       e.face += clamp(turn, -BULWARK_TURN*dt, BULWARK_TURN*dt);
     }
 
+    // warden: idle -> windup (telegraph) -> live (tethered, until dashed or timed out)
+    if (e.T.warden){
+      const W = e.tth;
+      W.t -= dt;
+      if (W.ph === 'idle'){
+        if (W.t <= 0 && !player.tether && d < WARDEN_RANGE && d > 70){
+          W.ph = 'windup'; W.t = WARDEN_WINDUP;
+        }
+      } else if (W.ph === 'windup'){
+        if (W.t <= 0){
+          // it commits at the end of the wind-up; walking clean out of range still beats it
+          if (d < WARDEN_RANGE*1.2){
+            W.ph = 'live'; W.t = WARDEN_HOLD; player.tether = e;
+            game.shake = Math.max(game.shake, 5);
+          } else { W.ph = 'idle'; W.t = WARDEN_CD; }
+        }
+      } else {                                        // live — the player may have dashed out
+        if (W.t <= 0 || player.tether !== e){
+          if (player.tether === e) player.tether = null;
+          W.ph = 'idle'; W.t = WARDEN_CD;
+        }
+      }
+    }
+
+    // herald: shells the ground on a fixed cycle, one mark leading where you are going
+    if (e.T.herald){
+      e.hz -= dt;
+      if (e.hz <= 0){
+        e.hz = HERALD_CYCLE;
+        for (let i = 0; i < HERALD_MARKS; i++){
+          if (zones.length >= ZONE_CAP) break;
+          const lx = i === 0 ? player.x + player.vx*0.6 : player.x + rnd(HERALD_SPREAD, -HERALD_SPREAD);
+          const ly = i === 0 ? player.y + player.vy*0.6 : player.y + rnd(HERALD_SPREAD, -HERALD_SPREAD);
+          zones.push({ x:arenaClamp(lx, HERALD_R), y:arenaClamp(ly, HERALD_R),
+                       t:HERALD_FUSE, max:HERALD_FUSE, dmg:e.dmg });
+        }
+      }
+    }
+
     // leaper: idle -> crouch (telegraph) -> air (ballistic) -> recover (vulnerable)
     let steer = true, drag = true;
     if (e.lp){
@@ -1390,6 +1484,22 @@ function updateEnemies(dt){
         spawnAt('walker', game.boss.x + Math.cos(a)*60, game.boss.y + Math.sin(a)*60);
       }
     }
+  }
+}
+
+/* Ground markers fill, then detonate. Damage is player-only: this is the boss attacking
+   you, not friendly fire that would clear its own horde for free. Routing through
+   hurtPlayer means i-frames apply, so dashing through a detonation is a real out. */
+function updateZones(dt){
+  for (let i = zones.length - 1; i >= 0; i--){
+    const z = zones[i];
+    z.t -= dt;
+    if (z.t > 0) continue;
+    zones.splice(i, 1);
+    blasts.push({x:z.x, y:z.y, r:HERALD_R, life:0.3, max:0.3, col:'#f0a428'});
+    burst(z.x, z.y, 12, '#f0a428', 280, 0.45, 3);
+    game.shake = Math.max(game.shake, 6);
+    if (Math.hypot(player.x - z.x, player.y - z.y) < HERALD_R + player.r) hurtPlayer(z.dmg);
   }
 }
 
@@ -1867,6 +1977,39 @@ function drawArena(){
    warning on its own against a busy screen — hence the converging line, the filling
    landing ring, and a stroke width that stays constant on screen at any zoom. */
 function drawTelegraphs(){
+  /* Herald markers speak the leaper's language deliberately — a ring that fills like a
+     clock. One telegraph vocabulary across the game means a new boss is readable on sight,
+     which matters more than usual with no audio to lean on. */
+  for (const z of zones){
+    const k = 1 - z.t/z.max;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.lineWidth = 5/ZOOM;
+    ctx.beginPath(); ctx.arc(z.x, z.y, HERALD_R, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = 'rgba(240,164,40,' + (0.5 + k*0.5) + ')'; ctx.lineWidth = 2.2/ZOOM;
+    ctx.beginPath(); ctx.arc(z.x, z.y, HERALD_R, 0, TAU); ctx.stroke();
+    ctx.fillStyle = 'rgba(240,164,40,0.18)';
+    ctx.beginPath(); ctx.moveTo(z.x, z.y);
+    ctx.arc(z.x, z.y, HERALD_R, -Math.PI/2, -Math.PI/2 + TAU*k); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  // warden tether: dashed and thickening while it winds up, solid once it has you
+  for (const e of enemies){
+    const W = e.tth;
+    if (!W || e.dead || W.ph === 'idle') continue;
+    const live = W.ph === 'live', k = live ? 1 : 1 - W.t/WARDEN_WINDUP;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = (4.6 + k*2.2)/ZOOM;
+    ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(player.x, player.y); ctx.stroke();
+    if (!live){ ctx.setLineDash([10/ZOOM, 8/ZOOM]); ctx.lineDashOffset = -game.t*60; }
+    ctx.strokeStyle = live ? '#5ce0d0' : 'rgba(92,224,208,' + (0.4 + k*0.6) + ')';
+    ctx.lineWidth = (1.6 + k*1.8)/ZOOM;
+    ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(player.x, player.y); ctx.stroke();
+    ctx.setLineDash([]); ctx.lineCap = 'butt';
+    ctx.restore();
+  }
+
   for (const e of enemies){
     const L = e.lp;
     if (!L || L.ph !== 'crouch' || e.dead) continue;
@@ -2346,7 +2489,11 @@ function resumeRun(d){
       // saves older than index 17 have no facing — look at the player, never due east
       face: typeof a[17] === 'number' ? a[17] : Math.atan2(player.y - a[2], player.x - a[1]),
       // leapers resume idle rather than mid-air: a saved leap has no honest telegraph
-      lp: T.leaper ? { ph:'idle', t:rnd(2.2, 0.9), tx:0, ty:0 } : null };
+      lp: T.leaper ? { ph:'idle', t:rnd(2.2, 0.9), tx:0, ty:0 } : null,
+      /* Same call as leapers resuming idle: a saved tether or half-filled shell has no
+         honest telegraph behind it, so both restart cold. Player-favourable. */
+      tth: T.warden ? { ph:'idle', t:rnd(2.6, 1.2) } : null,
+      hz:  T.herald ? rnd(3.2, 1.6) : 0 };
     enemies.push(e);
     if (a[15]){ game.boss = e; e.num = game.bossNum || 1; }   // restore its appearance number
   }
@@ -2619,6 +2766,14 @@ function dash(){
   if (!game || game.state !== 'play') return;
   if (player.dashCd > 0) return;
   player.dashCd = S.dashCd; player.dashT = 0.17; player.inv = 0.32;
+  /* Snapping the tether is the Warden's entire answer. Note the guards above: dash is
+     gated ONLY on its own cooldown and never on being tethered. A slow that could also
+     lock the escape button is exactly how a fight turns into unavoidable damage — Weeper's
+     acid will need this same rule. */
+  if (player.tether){
+    burst(player.x, player.y, 14, '#5ce0d0', 250, 0.45, 2.6);
+    player.tether = null;
+  }
   burst(player.x, player.y, 12, '#9dff5c', 220, 0.4, 2.4);
   buzz(12);
 }
