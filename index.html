@@ -585,7 +585,8 @@ function reset(){
     state:'play', t:0, wave:1, kills:0, level:1, xp:0, need:7,
     up:{}, rerolls:3, pending:0, spawnT:0.6, shake:0, shieldT:0,
     shield:0, auraT:0, boss:null, bossT:150, waveT:0, flash:0,
-    holdT:0, bossHold:0, waveClock:0, sandbox:false, bossNum:0
+    holdT:0, bossHold:0, waveClock:0, sandbox:false, bossNum:0,
+    bossBag:[], bossLast:null
   };
   S = recalc();
   player = {
@@ -669,14 +670,16 @@ function atCap(kind, counts){
 }
 
 function spawnAt(kind, x, y, ignoreCap){
-  if (enemies.length > ENEMY_CAP && kind !== 'boss') return;
+  // Test the TYPE flag, not the literal kind, or a boss variant added to the roster
+  // would be turned away by the cap and the wave gate would deadlock on a full field.
+  if (enemies.length > ENEMY_CAP && !TYPES[kind].boss) return;
   // safety net for direct calls (boss adds, scream bursts, tests) — the roll filters too.
   // Sandbox spawns pass ignoreCap: if you ask for a 6th brute you should get a brute.
   if (!ignoreCap && atCap(kind)) kind = 'runner';
   const T = TYPES[kind], d = diff();
   const e = {
     kind, T, x, y, vx:0, vy:0, r:T.r,
-    hp:T.hp * (kind === 'boss' ? 1 + game.t/180 : d.hp),
+    hp:T.hp * (T.boss ? 1 + game.t/180 : d.hp),
     max:0, spd:T.spd * d.spd * rnd(1.08, 0.92), dmg:T.dmg * d.dmg,
     atk:0, flash:0, burn:0, burnT:0, slowT:0, slowV:0, hitT:0, wob:rnd(TAU),
     shootT:rnd(2.5,1), spawnT:0.35,
@@ -730,16 +733,56 @@ const BOSS_EVERY = 10;            // waves between appearances
 
 function bossHpFor(n){ return BOSS_BASE_HP * Math.pow(2, n - 1); }
 
-function spawnBoss(){
+/* ---------- boss roster ----------
+   Which boss turns up on a boss wave is dealt from a shuffled bag, not rolled fresh each
+   time: the whole roster goes out, then it reshuffles. A plain roll would happily serve
+   the same variant three waves running while another never showed at all.
+
+   What the bag is actually for is easy to get wrong. A wave is 30s and BOSS_EVERY is 10,
+   so one full pass through a five-boss roster costs ~25 minutes of wave clock plus the
+   fights themselves — longer than most runs survive. The coverage guarantee is therefore
+   close to worthless. The bag earns its keep by making the FIRST boss of a run a
+   different one each time: variety lands across runs, not inside one. */
+const BOSS_ROSTER = ['boss'];
+
+const bossLabel = kind => TYPES[kind].name.toUpperCase();
+
+function shuffleBossBag(){
+  const bag = BOSS_ROSTER.slice();
+  for (let i = bag.length - 1; i > 0; i--){
+    const j = (Math.random() * (i + 1)) | 0;
+    const t = bag[i]; bag[i] = bag[j]; bag[j] = t;
+  }
+  /* Draws come off the end, so bag[last] is the next one out. If that repeats whichever
+     boss closed the previous bag you get a back-to-back pair across the seam — precisely
+     the streak a bag exists to prevent. Swap it away. Can't arise on a one-boss roster,
+     hence the length guard. */
+  if (bag.length > 1 && bag[bag.length - 1] === game.bossLast){
+    const j = (Math.random() * (bag.length - 1)) | 0;
+    const t = bag[bag.length - 1]; bag[bag.length - 1] = bag[j]; bag[j] = t;
+  }
+  return bag;
+}
+
+function drawBossKind(){
+  if (!game.bossBag || !game.bossBag.length) game.bossBag = shuffleBossBag();
+  game.bossLast = game.bossBag.pop();
+  return game.bossLast;
+}
+
+function spawnBoss(kind){
   const [x, y] = ringPoint();
   game.bossNum = (game.bossNum || 0) + 1;
-  const b = spawnAt('boss', x, y);
+  const k = kind || drawBossKind();
+  const b = spawnAt(k, x, y);
   if (b){
+    /* HP tracks how many bosses you have BEATEN, never which one this is, so shuffling
+       the roster cannot flatten or spike the difficulty ramp. */
     b.hp = b.max = bossHpFor(game.bossNum);
     b.num = game.bossNum;
   }
   game.boss = b;
-  banner('ABOMINATION #' + game.bossNum);
+  banner(bossLabel(k) + ' #' + game.bossNum);
 }
 
 /* ============================================================
@@ -965,7 +1008,7 @@ function kill(e){
   else if (S.novaChance > 0 && Math.random() < S.novaChance) boom(e.x, e.y, 62, S.damage*1.6, '#9dff5c');
   if (e.T.boss){
     game.boss = null; game.shake = 16; game.flash = 0.3;
-    banner('ABOMINATION DOWN');
+    banner(bossLabel(e.kind) + ' DOWN');
     game.rerolls++;
     /* Golden Core: one per Abomination, the only source in the game. Picking it up is a
        guaranteed level regardless of how far off the next one is. It homes to the player
@@ -1996,12 +2039,15 @@ function syncHud(force){
     el('bossFill').style.transform = 'scaleX(' + clamp(game.boss.hp/game.boss.max, 0, 1) + ')';
     // say why the wave counter has stopped, or it just looks broken
     const decay = BOSS_DECAY();
-    const tag = '#' + (game.boss.num || game.bossNum || 1) + ' · WAVE ' + game.wave +
+    /* The name is part of the diffed string now. Kept out of it, two different bosses
+       could share a tag and the second would wear the first one's name. */
+    const tag = bossLabel(game.boss.kind) + ' #' + (game.boss.num || game.bossNum || 1) +
+      ' · WAVE ' + game.wave +
       (decay > 1.05 ? ' HELD · BLEEDING OUT ×' + decay.toFixed(1) : ' HELD UNTIL IT DIES');
-    if (force || lastHud.bw !== tag){ el('bossName').textContent = 'ABOMINATION ' + tag; lastHud.bw = tag; }
+    if (force || lastHud.bw !== tag){ el('bossName').textContent = tag; lastHud.bw = tag; }
   } else {
     bw.style.display = 'none';
-    if (lastHud.bw !== undefined){ el('bossName').textContent = 'ABOMINATION'; lastHud.bw = undefined; }
+    if (lastHud.bw !== undefined){ el('bossName').textContent = ''; lastHud.bw = undefined; }
   }
 
   if (IS_TOUCH){
@@ -2165,7 +2211,10 @@ function saveRun(){
           need:game.need, up:game.up, rerolls:game.rerolls, pending:game.pending,
           spawnT:game.spawnT, shield:game.shield, shieldT:game.shieldT, bossT:game.bossT,
           holdT:game.holdT || 0, bossHold:game.bossHold || 0, waveClock:game.waveClock || 0,
-          bossNum:game.bossNum || 0 },
+          bossNum:game.bossNum || 0,
+          // whatever is still undrawn in the current bag, so a resumed run keeps its
+          // place in the rotation instead of reshuffling from scratch
+          bossBag:game.bossBag || [], bossLast:game.bossLast || null },
       p:{ x:r1(player.x), y:r1(player.y), vx:r1(player.vx), vy:r1(player.vy),
           hp:r1(player.hp), aim:player.aim, dashCd:player.dashCd, orbA:player.orbA },
       c:{ x:r1(cam.x), y:r1(cam.y) },
@@ -2202,6 +2251,11 @@ function resumeRun(d){
      SAVE, not the live object — reset() has already initialised game.waveClock to 0, so
      checking game here would never fire and would silently reset the player to wave 1. */
   if (typeof d.g.waveClock !== 'number') game.waveClock = Math.max(0, game.t - (game.holdT || 0));
+  /* Drop bag entries this build has no boss type for, or a save written against a
+     different roster would try to spawn a kind that isn't in TYPES. Sanitising the
+     LIVE value is correct here — unlike the waveClock migration above, which has to
+     test d.g — because reset() leaves an empty bag and filtering [] gives []. */
+  game.bossBag = (game.bossBag || []).filter(k => BOSS_ROSTER.indexOf(k) >= 0);
   S = recalc();
   Object.assign(player, d.p);
   player.hp = Math.min(player.hp, S.maxHp);
@@ -2392,14 +2446,14 @@ function sandboxRender(){
 
   const w = clamp(el("sbWave").value | 0, 1, 9999);
   const m = waveToTime(w)/60;
-  // how many Abominations have already been beaten by this wave sets the next one's HP
+  // how many bosses have already been beaten by this wave sets the next one's HP
   const bossN = Math.floor(w / BOSS_EVERY) + 1;
   el('sbNote').innerHTML = 'Wave ' + w + ' = <b>' + fmt(waveToTime(w)) +
     '</b> · enemies <b>×' + (1 + m*0.38 + m*m*0.021).toFixed(1) + '</b> health, <b>×' +
     (1 + m*0.11 + m*m*0.0035).toFixed(1) + '</b> damage, <b>×' + (1 + m*0.032).toFixed(2) +
-    '</b> speed<br>Next Abomination is <b>#' + bossN + '</b> at <b>' +
+    '</b> speed<br>Next boss is <b>#' + bossN + '</b> at <b>' +
     Math.round(bossHpFor(bossN)).toLocaleString() + '</b> HP' +
-    (w % BOSS_EVERY === 0 ? ' · this IS an Abomination wave' : '');
+    (w % BOSS_EVERY === 0 ? ' · this IS a boss wave' : '');
 }
 
 function openSandbox(live){
@@ -2443,7 +2497,8 @@ function buildSandboxPanel(){
     const e = spawnAt(k, player.x + Math.cos(a)*r, player.y + Math.sin(a)*r, true);
     if (e) e.spawnT = 0.25;
   });
-  add('ABOMINATION', () => { if (!game.boss || game.boss.dead) spawnBoss(); });
+  // draws from the bag exactly like a real boss wave does
+  add('BOSS', () => { if (!game.boss || game.boss.dead) spawnBoss(); });
 }
 
 /* ============================================================
