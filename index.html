@@ -655,6 +655,30 @@ const CHOIR_SHRINK = 0.74;          // radius per generation
 const CHOIR_SPEEDUP = 1.16;         // speed per generation
 const CHOIR_KICK = 200;             // how hard the halves are thrown apart
 
+/* ---------- collapsar ----------
+   Projects a ring centred on ITSELF that contracts as the fight runs, so you cannot kite
+   it — the safe ground travels with the thing trying to kill you, and it keeps shrinking
+   until you are fighting in its lap.
+
+   Radius is a pure function of game.bossHold, which is already saved, so the ring needs
+   no save field and can never desync from the fight it belongs to. Time is also what
+   makes this design curve-independent: every other boss keys off HP, and a shuffled bag
+   can drop any of them anywhere on a doubling curve, where a fixed close-rate would be
+   either meaningless or fatal. Elapsed fight time means the same thing at boss #1 and
+   boss #10.
+
+   Tuned so the ring matters in a NORMAL fight, not only a stalled one: boss kills measure
+   11-18s, and START/RATE put it at ~480 by 15s — well inside the viewport and visibly
+   tightening. It reaches the floor around 31s, and the floor is the endgame pressure.
+   An earlier cut multiplied the rate past BOSS_GRACE as an anti-stall; that was cut after
+   measuring, because the ring bottoms out well before 40s at any sane tuning so the
+   multiplier never once fired — and BOSS_DECAY already guarantees a stalled fight ends. */
+const COLLAPSE_START = 640;         // roughly the viewport edge at default zoom
+const COLLAPSE_MIN = 230;           // floor — tight, never unplayable
+const COLLAPSE_GRACE = 5;           // seconds before it begins closing
+const COLLAPSE_RATE = 16;           // units/sec
+const COLLAPSE_TICK = 0.4;          // damage interval while outside
+
 const LEAP_TELEGRAPH = 0.7;   // wind-up you get to react to
 const LEAP_SPEED = 620;
 const LEAP_RECOVER = 0.6;     // exposed window after landing
@@ -682,7 +706,9 @@ const TYPES = {
   herald:  {hp:900, spd:36,  dmg:26, r:44, xp:70, col:'#f0a428', dark:'#5c3c06', boss:true, elite:true, herald:true,  name:'herald'},
   // Splits under fire: one becomes two becomes four, each carrying a share of what is
   // left. Bone white because every other slot in the palette is already spoken for.
-  choir:   {hp:900, spd:46,  dmg:26, r:40, xp:70, col:'#e6dccb', dark:'#4a4030', boss:true, elite:true, choir:true,   name:'choir'}
+  choir:   {hp:900, spd:46,  dmg:26, r:40, xp:70, col:'#e6dccb', dark:'#4a4030', boss:true, elite:true, choir:true,   name:'choir'},
+  // Slowest and biggest. It never has to catch you — the ring does that.
+  collapsar:{hp:900, spd:34, dmg:30, r:46, xp:70, col:'#c9184a', dark:'#3d0518', boss:true, elite:true, collapsar:true, name:'collapsar'}
 };
 
 /* ============================================================
@@ -716,6 +742,7 @@ function reset(){
     up:{}, rerolls:3, pending:0, spawnT:0.6, shake:0, shieldT:0,
     shield:0, auraT:0, boss:null, bossT:150, waveT:0, flash:0,
     holdT:0, bossHold:0, waveClock:0, sandbox:false, bossNum:0, bossMax:0,
+    collapseArmed:false, collapseT:0,
     bossBag:[], bossLast:null,
     goldenPicks:0, goldenNow:false
   };
@@ -880,7 +907,7 @@ function bossHpFor(n){ return BOSS_BASE_HP * Math.pow(2, n - 1); }
    fights themselves — longer than most runs survive. The coverage guarantee is therefore
    close to worthless. The bag earns its keep by making the FIRST boss of a run a
    different one each time: variety lands across runs, not inside one. */
-const BOSS_ROSTER = ['boss', 'bulwark', 'warden', 'herald', 'choir'];
+const BOSS_ROSTER = ['boss', 'bulwark', 'warden', 'herald', 'choir', 'collapsar'];
 
 const bossLabel = kind => TYPES[kind].name.toUpperCase();
 
@@ -918,6 +945,53 @@ function scanBosses(){
     if (!e.T.boss || e.dead) continue;
     BOSS_N++; BOSS_HP += e.hp; BOSS_MAX += e.max;
   }
+}
+
+function collapseR(){
+  const t = Math.max(0, (game.bossHold || 0) - COLLAPSE_GRACE);
+  return Math.max(COLLAPSE_MIN, COLLAPSE_START - t*COLLAPSE_RATE);
+}
+
+function updateCollapse(dt){
+  const b = game.boss;
+  if (!b || b.dead || !b.T.collapsar) return;
+  const R = collapseR();
+  if (Math.hypot(player.x - b.x, player.y - b.y) <= R){
+    /* Arms on first entry, and only then. Spawn distance scales with the zoomed-out view
+       (ringPoint uses the viewport diagonal), so a maxed Long Barrel build meets this boss
+       thousands of units out — far outside any sane ring. Punishing a player for standing
+       where the game put them is not a mechanic. */
+    game.collapseArmed = true;
+    game.collapseT = 0;
+    return;
+  }
+  if (!game.collapseArmed) return;
+  game.collapseT = (game.collapseT || 0) + dt;
+  if (game.collapseT >= COLLAPSE_TICK){
+    game.collapseT = 0;
+    hurtPlayer(b.dmg * 0.8);      // through hurtPlayer, so armor, shields and i-frames apply
+    game.shake = Math.max(game.shake, 5);
+    burst(player.x, player.y, 5, '#ff3d6e', 200, 0.4, 2.4);
+  }
+}
+
+function drawCollapse(){
+  const b = game.boss;
+  if (!b || b.dead || !b.T.collapsar) return;
+  const R = collapseR();
+  const outside = Math.hypot(player.x - b.x, player.y - b.y) > R;
+  ctx.save();
+  ctx.setLineDash([26/ZOOM, 17/ZOOM]);
+  ctx.lineDashOffset = -game.t*40;
+  ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 9/ZOOM;
+  ctx.beginPath(); ctx.arc(b.x, b.y, R, 0, TAU); ctx.stroke();
+  // hard red the moment you are on the wrong side of it, so the rule needs no explaining
+  ctx.strokeStyle = outside ? '#ff3d6e'
+    : 'rgba(255,110,150,' + (0.5 + Math.sin(game.t*5)*0.18) + ')';
+  ctx.lineWidth = (outside ? 4.6 : 2.8)/ZOOM;
+  ctx.beginPath(); ctx.arc(b.x, b.y, R, 0, TAU); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
 }
 
 function splitChoir(e){
@@ -962,6 +1036,7 @@ function spawnBoss(kind){
      well as its hp — so summing survivors held the bar at a flat 55% while you killed a
      quarter of the family. Progress has to be visible. */
   game.bossMax = bossHpFor(game.bossNum);
+  game.collapseArmed = false; game.collapseT = 0;   // per-boss, never carried between fights
   game.boss = b;
   banner(bossLabel(k) + ' #' + game.bossNum);
 }
@@ -1286,6 +1361,7 @@ function update(dt){
   buildGrid();
   updateEnemies(dt);
   updateZones(dt);
+  updateCollapse(dt);
   updateBullets(dt);
   updateGems(dt);
   updateFx(dt);
@@ -2050,6 +2126,7 @@ function render(){
     ctx.globalAlpha = 1;
   }
 
+  drawCollapse();
   drawTelegraphs();
   drawEnemies();
 
