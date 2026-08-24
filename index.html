@@ -644,6 +644,17 @@ const HERALD_R = 86;
 const HERALD_SPREAD = 250;
 const ZONE_CAP = 14;
 
+/* ---------- choir ----------
+   Mitosis. Splits IN PLACE rather than dying and respawning: routing a division through
+   kill() would pay out a full gem purse, a Golden Core and a DOWN banner every time it
+   divided. Total hp and total max are conserved across a split, so the boss bar stays
+   honest no matter how many bodies are on the field. */
+const CHOIR_SPLIT_AT = 0.6;         // fraction of its OWN max that triggers a division
+const CHOIR_GENS = 2;               // 1 -> 2 -> 4
+const CHOIR_SHRINK = 0.74;          // radius per generation
+const CHOIR_SPEEDUP = 1.16;         // speed per generation
+const CHOIR_KICK = 200;             // how hard the halves are thrown apart
+
 const LEAP_TELEGRAPH = 0.7;   // wind-up you get to react to
 const LEAP_SPEED = 620;
 const LEAP_RECOVER = 0.6;     // exposed window after landing
@@ -668,7 +679,10 @@ const TYPES = {
   // Tethers you and reels you in. Its fight is about your dash, not your aim.
   warden:  {hp:900, spd:44,  dmg:28, r:38, xp:70, col:'#2fb8a8', dark:'#0e4640', boss:true, elite:true, warden:true,  name:'warden'},
   // Shells the ground. Slowest of the bosses because it never needs to reach you.
-  herald:  {hp:900, spd:36,  dmg:26, r:44, xp:70, col:'#f0a428', dark:'#5c3c06', boss:true, elite:true, herald:true,  name:'herald'}
+  herald:  {hp:900, spd:36,  dmg:26, r:44, xp:70, col:'#f0a428', dark:'#5c3c06', boss:true, elite:true, herald:true,  name:'herald'},
+  // Splits under fire: one becomes two becomes four, each carrying a share of what is
+  // left. Bone white because every other slot in the palette is already spoken for.
+  choir:   {hp:900, spd:46,  dmg:26, r:40, xp:70, col:'#e6dccb', dark:'#4a4030', boss:true, elite:true, choir:true,   name:'choir'}
 };
 
 /* ============================================================
@@ -701,7 +715,7 @@ function reset(){
     state:'play', t:0, wave:1, kills:0, level:1, xp:0, need:7,
     up:{}, rerolls:3, pending:0, spawnT:0.6, shake:0, shieldT:0,
     shield:0, auraT:0, boss:null, bossT:150, waveT:0, flash:0,
-    holdT:0, bossHold:0, waveClock:0, sandbox:false, bossNum:0,
+    holdT:0, bossHold:0, waveClock:0, sandbox:false, bossNum:0, bossMax:0,
     bossBag:[], bossLast:null,
     goldenPicks:0, goldenNow:false
   };
@@ -806,7 +820,8 @@ function spawnAt(kind, x, y, ignoreCap){
     // only the bulwark reads this; it walks on already looking at you
     face: T.bulwark ? Math.atan2(player.y - y, player.x - x) : 0,
     tth: T.warden ? { ph:'idle', t:rnd(2.6, 1.2) } : null,
-    hz:  T.herald ? rnd(3.2, 1.6) : 0
+    hz:  T.herald ? rnd(3.2, 1.6) : 0,
+    gen: 0
   };
   e.max = e.hp;
   enemies.push(e);
@@ -865,7 +880,7 @@ function bossHpFor(n){ return BOSS_BASE_HP * Math.pow(2, n - 1); }
    fights themselves — longer than most runs survive. The coverage guarantee is therefore
    close to worthless. The bag earns its keep by making the FIRST boss of a run a
    different one each time: variety lands across runs, not inside one. */
-const BOSS_ROSTER = ['boss', 'bulwark', 'warden', 'herald'];
+const BOSS_ROSTER = ['boss', 'bulwark', 'warden', 'herald', 'choir'];
 
 const bossLabel = kind => TYPES[kind].name.toUpperCase();
 
@@ -892,6 +907,45 @@ function drawBossKind(){
   return game.bossLast;
 }
 
+/* A boss is no longer necessarily one body. Everything that used to read game.boss for
+   aliveness or health — the wave gate and the HUD bar — reads these instead, so a Choir
+   holds the wave until the LAST fragment dies and its bar shows the whole family.
+   Written into module vars rather than returned, to keep it allocation-free per frame. */
+let BOSS_N = 0, BOSS_HP = 0, BOSS_MAX = 0;
+function scanBosses(){
+  BOSS_N = 0; BOSS_HP = 0; BOSS_MAX = 0;
+  for (const e of enemies){
+    if (!e.T.boss || e.dead) continue;
+    BOSS_N++; BOSS_HP += e.hp; BOSS_MAX += e.max;
+  }
+}
+
+function splitChoir(e){
+  e.gen = (e.gen || 0) + 1;
+  e.hp *= 0.5; e.max *= 0.5;            // conserved: two halves still total the original
+  e.r *= CHOIR_SHRINK; e.spd *= CHOIR_SPEEDUP;
+  e.flash = 0.14;
+  const a = rnd(TAU), off = e.r*1.7;
+  const sib = {
+    kind:e.kind, T:e.T,
+    x:arenaClamp(e.x + Math.cos(a)*off, e.r), y:arenaClamp(e.y + Math.sin(a)*off, e.r),
+    vx:Math.cos(a)*CHOIR_KICK, vy:Math.sin(a)*CHOIR_KICK,
+    r:e.r, hp:e.hp, max:e.max, spd:e.spd, dmg:e.dmg,
+    atk:0, flash:0.14, burn:0, burnT:0, slowT:0, slowV:0, hitT:0, wob:rnd(TAU),
+    shootT:rnd(2.5, 1), spawnT:0, rage:e.rage || 0, screamT:rnd(5.5, 3),
+    lp:null, face:0, tth:null, hz:0, gen:e.gen, num:e.num
+  };
+  // throw the original the other way, or the two halves sit inside each other as one blob
+  e.x = arenaClamp(e.x - Math.cos(a)*off, e.r);
+  e.y = arenaClamp(e.y - Math.sin(a)*off, e.r);
+  e.vx -= Math.cos(a)*CHOIR_KICK; e.vy -= Math.sin(a)*CHOIR_KICK;
+  /* Safe to push mid-loop: updateEnemies walks backwards from the end, so anything
+     appended sits above the cursor and is simply not visited until next frame. */
+  enemies.push(sib);
+  burst(e.x, e.y, 20, e.T.col, 320, 0.55, 3.2);
+  game.shake = Math.max(game.shake, 8);
+}
+
 function spawnBoss(kind){
   const [x, y] = ringPoint();
   game.bossNum = (game.bossNum || 0) + 1;
@@ -903,6 +957,11 @@ function spawnBoss(kind){
     b.hp = b.max = bossHpFor(game.bossNum);
     b.num = game.bossNum;
   }
+  /* The bar measures against what the boss STARTED with, never against the sum of what is
+     still standing. Splits conserve total max, but a death removes a fragment's max as
+     well as its hp — so summing survivors held the bar at a flat 55% while you killed a
+     quarter of the family. Progress has to be visible. */
+  game.bossMax = bossHpFor(game.bossNum);
   game.boss = b;
   banner(bossLabel(k) + ' #' + game.bossNum);
 }
@@ -1143,6 +1202,8 @@ function kill(e){
   game.kills++;
   burst(e.x, e.y, e.T.boss ? 46 : 8 + e.r/2, e.T.col, e.T.boss ? 420 : 200, 0.6, e.T.boss ? 4 : 2.6);
   let n = 1 + (e.T.boss ? 9 : e.T.elite ? 2 : 0);
+  // a Choir dies in up to four pieces; without this each piece paid a full boss purse
+  if (e.gen) n = Math.max(2, Math.round(n / Math.pow(2, e.gen)));
   if (Math.random() < S.greed) n++;
   for (let i = 0; i < n; i++){
     gems.push({x:arenaClamp(e.x + rnd(14,-14), 6), y:arenaClamp(e.y + rnd(14,-14), 6),
@@ -1152,6 +1213,18 @@ function kill(e){
   if (e.T.boom) boom(e.x, e.y, 92, 34 + game.t/12, '#e8734f');
   else if (S.novaChance > 0 && Math.random() < S.novaChance) boom(e.x, e.y, 62, S.damage*1.6, '#9dff5c');
   if (e.T.boss){
+    /* A boss can be several bodies. Everything below is the reward for beating the whole
+       thing, so it fires once, when the LAST of them dies — otherwise four Choir
+       fragments each dropped a Golden Core, which is four free legendary levels. */
+    let others = 0;
+    for (const o of enemies) if (o !== e && o.T.boss && !o.dead) others++;
+    if (others > 0){
+      // the lead reference has to follow a survivor, or the HUD bar and the auto-aim
+      // short-circuit both lose track of a fight still in progress
+      if (game.boss === e)
+        game.boss = enemies.find(o => o !== e && o.T.boss && !o.dead) || null;
+      return;
+    }
     game.boss = null; game.shake = 16; game.flash = 0.3;
     banner(bossLabel(e.kind) + ' DOWN');
     game.rerolls++;
@@ -1193,7 +1266,8 @@ function update(dt){
      by however long the fight took.
      Note diff() deliberately still runs on real time — stalling the boss gets steadily
      more dangerous, so the gate creates urgency instead of a safe farming spot. */
-  const bossAlive = !!(game.boss && !game.boss.dead);
+  scanBosses();
+  const bossAlive = BOSS_N > 0;          // a Choir holds the wave until every piece is dead
   if (bossAlive){ game.holdT += dt; game.bossHold += dt; }
   else { game.bossHold = 0; game.waveClock += dt; }   // clock only runs when not held
 
@@ -1421,6 +1495,10 @@ function updateEnemies(dt){
       e.screamT -= dt;
       if (e.screamT <= 0){ e.screamT = SCREAM_CYCLE; scream(e); }
     }
+
+    // choir: divides under fire, in place — see splitChoir for why not through kill()
+    if (e.T.choir && (e.gen || 0) < CHOIR_GENS && e.hp <= e.max * CHOIR_SPLIT_AT)
+      splitChoir(e);
 
     // bulwark: facing chases the bearing to the player but may only swing so fast
     if (e.T.bulwark){
@@ -2028,7 +2106,9 @@ function render(){
   ctx.restore();
 
   // off-screen boss marker
-  if (game.boss && !game.boss.dead) offscreenMark(game.boss.x, game.boss.y, '#ff3d6e');
+  /* Every boss body, not just the lead one, and in its own colour — a Choir is up to four
+     of them and they scatter far enough that a single marker leaves you hunting. */
+  for (const e of enemies) if (e.T.boss && !e.dead) offscreenMark(e.x, e.y, e.T.col);
   // Screamers hold station outside the scan ring, which is often outside the viewport
   // too — without a marker you get enraged with no idea where it is coming from.
   for (const e of enemies) if (e.T.screamer && !e.dead) offscreenMark(e.x, e.y, '#ff5cf0');
@@ -2375,15 +2455,18 @@ function syncHud(force){
   if (force || lastHud.k !== game.kills){ el('mKills').textContent = game.kills; lastHud.k = game.kills; }
   if (force || lastHud.a !== enemies.length){ el('mAlive').textContent = enemies.length; lastHud.a = enemies.length; }
   const bw = el('bossWrap');
-  if (game.boss && !game.boss.dead){
+  scanBosses();
+  if (game.boss && !game.boss.dead && BOSS_MAX > 0){
     bw.style.display = 'block';
-    el('bossFill').style.transform = 'scaleX(' + clamp(game.boss.hp/game.boss.max, 0, 1) + ')';
+    // summed across every body, so a Choir splitting does not make its bar jump
+    el('bossFill').style.transform =
+      'scaleX(' + clamp(BOSS_HP/(game.bossMax || BOSS_MAX), 0, 1) + ')';
     // say why the wave counter has stopped, or it just looks broken
     const decay = BOSS_DECAY();
     /* The name is part of the diffed string now. Kept out of it, two different bosses
        could share a tag and the second would wear the first one's name. */
     const tag = bossLabel(game.boss.kind) + ' #' + (game.boss.num || game.bossNum || 1) +
-      ' · WAVE ' + game.wave +
+      (BOSS_N > 1 ? ' ×' + BOSS_N : '') + ' · WAVE ' + game.wave +
       (decay > 1.05 ? ' HELD · BLEEDING OUT ×' + decay.toFixed(1) : ' HELD UNTIL IT DIES');
     if (force || lastHud.bw !== tag){ el('bossName').textContent = tag; lastHud.bw = tag; }
   } else {
@@ -2556,6 +2639,7 @@ function saveRun(){
           // whatever is still undrawn in the current bag, so a resumed run keeps its
           // place in the rotation instead of reshuffling from scratch
           bossBag:game.bossBag || [], bossLast:game.bossLast || null,
+          bossMax:game.bossMax || 0,
           // a core collected but not yet spent must survive a reload
           goldenPicks:game.goldenPicks || 0, goldenNow:!!game.goldenNow },
       p:{ x:r1(player.x), y:r1(player.y), vx:r1(player.vx), vy:r1(player.vy),
@@ -2568,7 +2652,10 @@ function saveRun(){
           r1(e.dmg), r1(e.wob), r1(e.burn), r1(e.burnT), r1(e.slowT), r1(e.slowV),
           // index 17 (bulwark facing) appended — without it a resumed plate points
           // somewhere the drawing does not show and blocks from the wrong side
-          r1(e.shootT), e === game.boss ? 1 : 0, r1(e.rage || 0), r1(e.face || 0) ]),
+          // index 18 (choir generation) appended — radius and split eligibility derive
+          // from it, so without it a resumed fragment comes back full-size and re-divides
+          r1(e.shootT), e === game.boss ? 1 : 0, r1(e.rage || 0), r1(e.face || 0),
+          e.gen || 0 ]),
       // index 4 flags a Golden Core; without it a saved one restores as a worthless
       // 0-XP green gem and the boss reward is silently lost. Appended, so older saves load.
       m:gems.slice(0, 400).map(g => [r1(g.x), r1(g.y), g.v, g.r, g.golden ? 1 : 0])
@@ -2601,6 +2688,8 @@ function resumeRun(d){
      LIVE value is correct here — unlike the waveClock migration above, which has to
      test d.g — because reset() leaves an empty bag and filtering [] gives []. */
   game.bossBag = (game.bossBag || []).filter(k => BOSS_ROSTER.indexOf(k) >= 0);
+  // saves written before bossMax existed: rebuild it from the appearance number
+  if (!game.bossMax && game.bossNum) game.bossMax = bossHpFor(game.bossNum);
   S = recalc();
   Object.assign(player, d.p);
   player.hp = Math.min(player.hp, S.maxHp);
@@ -2615,8 +2704,10 @@ function resumeRun(d){
   for (const a of (d.e || [])){
     const T = TYPES[a[0]];
     if (!T) continue;            // unknown type from an older build — skip it
-    const e = { kind:a[0], T, x:arenaClamp(a[1], T.r), y:arenaClamp(a[2], T.r),
-      vx:a[3], vy:a[4], r:T.r,
+    // radius is derived from the generation rather than saved, so it can never disagree
+    const gen = a[18] || 0, rr = T.r * Math.pow(CHOIR_SHRINK, gen);
+    const e = { kind:a[0], T, x:arenaClamp(a[1], rr), y:arenaClamp(a[2], rr),
+      vx:a[3], vy:a[4], r:rr, gen,
       hp:a[5], max:a[6], spd:a[7], dmg:a[8], wob:a[9], burn:a[10], burnT:a[11],
       slowT:a[12], slowV:a[13], shootT:a[14],
       atk:0, flash:0, hitT:0, spawnT:0,
