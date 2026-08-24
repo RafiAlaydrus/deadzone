@@ -18,15 +18,18 @@
   :root{
     --ink:#070a0c;
     --ink2:#0d1317;
-    --line:#16232a;
+    --line:#18232a;
+    --line-hi:#2b3a42;
+    --surface:#0b1114;
     --phos:#9dff5c;
-    --phos-dim:#5c8f3a;
+    --phos-dim:#4a7530;
     --amber:#ffb545;
     --hot:#ff3d6e;
     --cool:#4fd6ff;
     --violet:#b58cff;
     --bone:#dfe7e3;
-    --mute:#6c8088;
+    --mute:#68797f;
+    --dim:#3c484e;
     /* mirrored as custom properties so the canvas code can read the insets too */
     --sat:env(safe-area-inset-top,0px);
     --sab:env(safe-area-inset-bottom,0px);
@@ -55,15 +58,15 @@
   .bars{display:flex;flex-direction:column;gap:5px;max-width:560px}
   .bar{position:relative;height:13px;border:1px solid var(--line);background:#0a1013;overflow:hidden}
   .bar > i{position:absolute;inset:0;transform-origin:left;transform:scaleX(0);transition:transform .12s linear}
-  #hpFill{background:linear-gradient(90deg,#ff3d6e,#ff7a5c)}
-  #xpFill{background:linear-gradient(90deg,var(--phos-dim),var(--phos))}
+  #hpFill{background:var(--hot)}
+  #xpFill{background:var(--phos)}
   .bar > span{position:absolute;inset:0;display:flex;align-items:center;justify-content:space-between;padding:0 6px;font-size:9px;letter-spacing:.14em;color:rgba(255,255,255,.9);font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,.85)}
   .meta{display:flex;gap:14px;font-size:11px;letter-spacing:.16em;color:var(--mute);flex-wrap:wrap}
   .meta b{color:var(--bone);font-weight:600}
   .meta .lv{color:var(--phos)}
   #bossWrap{max-width:560px;display:none}
   #bossWrap .bar{height:8px;border-color:#3a1420}
-  #bossFill{background:linear-gradient(90deg,#7a0d24,var(--hot))}
+  #bossFill{background:var(--hot)}
   #bossName{font-size:9px;letter-spacing:.24em;color:var(--hot);margin-bottom:3px}
 
   /* The upgrade chip strip was removed: a long run stacks 30+ of them and they blanket
@@ -71,58 +74,101 @@
      build is still listed on the death screen. */
 
   #wave{position:absolute;left:50%;top:26%;transform:translateX(-50%);font-size:min(9vw,58px);letter-spacing:.3em;
-    color:#fff;opacity:0;text-shadow:0 0 26px #9dff5c66;white-space:nowrap}
+    color:#fff;opacity:0;text-shadow:0 2px 14px rgba(0,0,0,.92);white-space:nowrap}
   #wave.go{animation:wv 2.1s ease-out}
   @keyframes wv{0%{opacity:0;letter-spacing:.9em}18%{opacity:1;letter-spacing:.3em}70%{opacity:1}100%{opacity:0;letter-spacing:.34em}}
 
   /* ---------- overlays ---------- */
   /* fixed, not absolute: pinned to the display rather than to #wrap, so an overlay can
      never leave an uncovered strip if the wrapper is short */
-  .veil{position:fixed;inset:0;background:radial-gradient(120% 100% at 50% 40%,#050809e6,#020304f2);
+  /* Flat surfaces, hairline rules, one accent. The panels used to lean on a radial
+     veil, gradient cards and a bloom behind the wordmark — all decoration rather than
+     structure, none of it earning its place. Hierarchy comes from type size and
+     letter-spacing now, never from glow. */
+  /* fixed, not absolute: pinned to the display rather than to #wrap, so an overlay can
+     never leave an uncovered strip if the wrapper is short */
+  /* Menus sit on solid ground; in-run overlays stay translucent on purpose, because the
+     frozen field behind a level-up screen is information you actually pick cards against. */
+  #vStart,#vDead,#vSandbox{background:#050809}
+  .veil{position:fixed;inset:0;background:#050809f2;
     display:flex;align-items:center;justify-content:center;z-index:5;
-    padding:calc(16px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
-            calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));}
+    padding:calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
+            calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));}
   .hide{display:none!important}
   /* body sets touch-action:none for the game; re-enable vertical scroll inside overlays */
-  .panel{width:100%;max-width:880px;max-height:100%;overflow-y:auto;
+  .panel{width:100%;max-width:600px;max-height:100%;overflow-y:auto;
     touch-action:pan-y;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
-  .kicker{font-size:10px;letter-spacing:.42em;color:var(--phos-dim);margin-bottom:8px}
-  h1{font-size:clamp(34px,9vw,80px);letter-spacing:.06em;font-weight:700;line-height:.92;color:#fff}
-  h1 em{font-style:normal;color:var(--phos);text-shadow:0 0 30px #9dff5c55}
-  h2{font-size:clamp(18px,4vw,26px);letter-spacing:.22em;font-weight:600}
-  .sub{color:var(--mute);font-size:12px;line-height:1.9;letter-spacing:.06em;margin:14px 0 20px}
-  .sub b{color:var(--bone)}
-  kbd{border:1px solid var(--line);background:#0d1317;padding:1px 6px;color:var(--phos);font-size:11px}
-  .btn{pointer-events:auto;border:1px solid var(--phos-dim);background:#0c1410;color:var(--phos);
-    padding:12px 26px;font:inherit;font-size:13px;letter-spacing:.24em;cursor:pointer;transition:.15s;
-    touch-action:manipulation;min-height:44px}
-  .btn:hover,.btn:focus-visible{background:var(--phos);color:#06090a;outline:none}
-  .btn.ghost{border-color:var(--line);color:var(--mute)}
-  .btn.ghost:hover{background:var(--line);color:var(--bone)}
+  #vLevel .panel{max-width:880px}
+  #vSandbox .panel{max-width:900px}
 
-  #cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0 14px}
+  /* The tick is the only ornament in the system; everything else is type and hairlines. */
+  .eyebrow{display:flex;align-items:center;gap:9px;font-size:9px;letter-spacing:.36em;
+    color:var(--mute);margin-bottom:18px}
+  .eyebrow::before{content:'';width:6px;height:6px;background:var(--phos);flex:none}
+  .eyebrow.hot::before{background:var(--hot)}
+  .eyebrow.violet::before{background:var(--violet)}
+
+  h1{font-size:clamp(38px,9vw,76px);letter-spacing:.04em;font-weight:600;line-height:.94;color:#fff}
+  h1 em{font-style:normal;color:var(--phos)}
+  h2{font-size:clamp(20px,4vw,28px);letter-spacing:.18em;font-weight:600;color:#fff}
+  .lede{color:var(--mute);font-size:12.5px;line-height:1.8;letter-spacing:.03em;margin-top:15px}
+  .lede b{color:var(--bone);font-weight:600}
+  .rule{height:1px;background:var(--line);margin:24px 0}
+  .foot{margin-top:22px;font-size:10px;letter-spacing:.1em;color:var(--dim);line-height:2}
+  .sub{color:var(--mute);font-size:11.5px;line-height:1.8;letter-spacing:.03em;margin:14px 0 20px}
+  .sub b{color:var(--bone)}
+  kbd{border:1px solid var(--line);background:var(--ink2);padding:2px 6px;color:var(--mute);
+    font:inherit;font-size:9.5px;letter-spacing:.1em;margin-right:4px}
+
+  /* Compact technical strip — replaces the prose run summary the lobby used to carry. */
+  .dataRow{display:flex;flex-wrap:wrap;border:1px solid var(--line);margin-bottom:22px}
+  .dataRow > div{flex:1 1 88px;padding:11px 13px;border-right:1px solid var(--line)}
+  .dataRow > div:last-child{border-right:0}
+  .dataRow span{display:block;font-size:8.5px;letter-spacing:.24em;color:var(--dim);margin-bottom:5px}
+  .dataRow b{font-size:15px;font-weight:600;letter-spacing:.02em;color:var(--bone)}
+
+  .btn{pointer-events:auto;border:1px solid var(--phos-dim);background:transparent;color:var(--phos);
+    padding:12px 24px;font:inherit;font-size:11px;letter-spacing:.22em;cursor:pointer;
+    transition:background .13s,color .13s,border-color .13s;
+    touch-action:manipulation;min-height:44px}
+  .btn:hover,.btn:focus-visible{background:var(--phos);color:#06090a;border-color:var(--phos);outline:none}
+  .btn.ghost{border-color:var(--line);color:var(--mute)}
+  .btn.ghost:hover,.btn.ghost:focus-visible{border-color:var(--line-hi);color:var(--bone);background:transparent}
+  .btn:disabled{opacity:.32;cursor:default}
+  .btn:disabled:hover{background:transparent;color:var(--mute);border-color:var(--line)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  /* Tertiary weight. Three equal buttons wrap on a phone and the wrap reads as
+     overflow; making the third one visibly smaller makes it read as hierarchy. */
+  .btn.sm{padding:10px 16px;font-size:10px;letter-spacing:.18em}
+
+  #cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:22px 0 18px}
   .card{pointer-events:auto;text-align:left;font:inherit;cursor:pointer;position:relative;
-    border:1px solid var(--line);background:linear-gradient(180deg,#0e1519,#090d10);padding:16px 14px 14px;
-    color:var(--bone);transition:transform .12s,border-color .12s,background .12s;
-    touch-action:manipulation}
-  .card:active{transform:scale(.985);background:#141d22}
-  .card:hover,.card:focus-visible{transform:translateY(-3px);outline:none}
-  .card .ic{font-size:24px;line-height:1;margin-bottom:10px}
-  .card .nm{font-size:14px;letter-spacing:.08em;margin-bottom:4px}
-  .card .rr{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--mute);margin-bottom:9px}
-  .card .ds{font-size:11px;line-height:1.65;color:#9fb0b6}
-  .card .key{position:absolute;top:10px;right:12px;font-size:10px;color:var(--mute);border:1px solid var(--line);padding:0 5px}
-  .card.common:hover{border-color:#7d8f96}
-  .card.rare{border-color:#1b3a4a}.card.rare .rr{color:var(--cool)}.card.rare:hover{border-color:var(--cool)}
-  .card.epic{border-color:#2e2350}.card.epic .rr{color:var(--violet)}.card.epic:hover{border-color:var(--violet)}
-  .card.legendary{border-color:#4a3512}.card.legendary .rr{color:var(--amber)}.card.legendary:hover{border-color:var(--amber)}
-  .card.legendary::after{content:'';position:absolute;inset:0;pointer-events:none;
-    background:radial-gradient(90% 60% at 50% 0,#ffb54520,transparent)}
-  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:18px 0}
-  .stats div{background:#0a0f12;padding:12px 14px}
-  .stats span{display:block;font-size:9px;letter-spacing:.24em;color:var(--mute);margin-bottom:5px}
-  .stats b{font-size:22px;font-weight:600;letter-spacing:.02em}
+    border:1px solid var(--line);border-top-width:2px;background:var(--surface);
+    padding:16px 15px 15px;color:var(--bone);
+    transition:border-color .12s,background .12s;touch-action:manipulation}
+  .card:active{background:#111a1e}
+  .card:hover,.card:focus-visible{outline:none;background:#0f171b}
+  .card .ic{font-size:20px;line-height:1;margin-bottom:12px;color:#8b9ca2}
+  .card .nm{font-size:14px;letter-spacing:.04em;margin-bottom:6px;color:#fff}
+  .card .rr{font-size:8.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--dim);margin-bottom:10px}
+  .card .ds{font-size:11px;line-height:1.7;color:var(--mute)}
+  .card .key{position:absolute;top:13px;right:14px;font-size:9px;color:var(--dim)}
+  /* Rarity reads off the top edge. As a dim full outline it was invisible at a glance. */
+  .card.common{border-top-color:var(--line-hi)}
+  .card.common:hover{border-color:var(--line-hi)}
+  .card.rare{border-top-color:var(--cool)}.card.rare .rr{color:var(--cool)}
+  .card.rare:hover{border-color:#1e4657;border-top-color:var(--cool)}
+  .card.epic{border-top-color:var(--violet)}.card.epic .rr{color:var(--violet)}
+  .card.epic:hover{border-color:#33275a;border-top-color:var(--violet)}
+  .card.legendary{border-top-color:var(--amber)}.card.legendary .rr{color:var(--amber)}
+  .card.legendary:hover{border-color:#543c15;border-top-color:var(--amber)}
+
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));
+    border:1px solid var(--line);margin:22px 0}
+  .stats div{padding:13px 14px;border-right:1px solid var(--line)}
+  .stats div:last-child{border-right:0}
+  .stats span{display:block;font-size:8.5px;letter-spacing:.24em;color:var(--dim);margin-bottom:6px}
+  .stats b{font-size:21px;font-weight:600;letter-spacing:.02em;color:var(--bone)}
   #touchDash{position:absolute;right:calc(18px + env(safe-area-inset-right));bottom:calc(18px + env(safe-area-inset-bottom));
     width:88px;height:88px;border-radius:50%;
     border:1px solid var(--phos-dim);color:var(--phos);background:#0c141099;display:none;
@@ -142,25 +188,39 @@
   body.touch.playing #touchDash{display:flex}
   body.touch.playing #touchPause{display:flex}
   body.touch .desktopOnly{display:none}
+  /* The HUD showed through the veil as a smear behind the panel. Every overlay already
+     carries what it was reporting, so it has no job while one is open. */
+  body:not(.playing) #hud{display:none}
   /* keep the top HUD clear of the pause button */
   body.touch .bars,body.touch .meta{padding-right:52px}
   /* sandbox adds a second top-right button, so the bars need room for both */
   body.sandboxing .bars,body.sandboxing .meta{padding-right:104px}
   @media (max-width:620px){
-    #cards{grid-template-columns:1fr;gap:7px;margin:12px 0 12px}
-    .card{padding:13px 12px}.card .ic{font-size:19px;margin-bottom:5px;display:inline-block;margin-right:8px}
-    .card .nm{display:inline-block}.card .ds{margin-top:5px}
+    #cards{grid-template-columns:1fr;gap:6px;margin:16px 0 14px}
+    .card{padding:12px 13px}
+    .card .ic{font-size:15px;margin-bottom:0;display:inline-block;margin-right:9px;vertical-align:middle}
+    .card .nm{display:inline-block;vertical-align:middle;margin-bottom:0}
+    .card .rr{margin:8px 0 6px}.card .ds{margin-top:0}
+    .lede{font-size:11.5px;line-height:1.75;margin-top:12px}
+    .rule{margin:18px 0}
     .sub{font-size:11px;line-height:1.75;margin:10px 0 14px}
-    .stats{margin:12px 0}.stats b{font-size:18px}.stats div{padding:9px 11px}
+    .stats{margin:16px 0}.stats b{font-size:17px}.stats div{padding:10px 11px}
+    .dataRow{margin-bottom:16px}.dataRow > div{padding:9px 11px;flex-basis:70px}
+    .dataRow b{font-size:13px}
     .meta{gap:10px;font-size:10px}
-    h1{font-size:clamp(30px,11vw,54px)}
+    h1{font-size:clamp(32px,11vw,54px)}
+    .eyebrow{margin-bottom:14px}
+    .foot{margin-top:16px;line-height:1.9}
   }
   /* landscape phones: very little vertical room */
   @media (max-height:460px){
-    #cards{grid-template-columns:repeat(3,1fr);gap:6px;margin:10px 0}
-    .card{padding:9px 10px}.card .ds{display:none}
-    h1{font-size:clamp(24px,7vw,40px)}
+    #cards{grid-template-columns:repeat(3,1fr);gap:6px;margin:12px 0}
+    .card{padding:10px 11px}.card .ds{display:none}
+    h1{font-size:clamp(26px,7vw,40px)}
+    .lede{margin-top:8px}.rule{margin:12px 0}
     .sub{margin:8px 0 10px}
+    .foot{margin-top:10px}
+    .eyebrow{margin-bottom:10px}
     #touchDash{width:66px;height:66px}
   }
   /* ---------- sandbox ---------- */
@@ -249,35 +309,30 @@
   <!-- START -->
   <div class="veil" id="vStart">
     <div class="panel">
-      <div class="kicker">SECTOR 7 · QUARANTINE FAILED</div>
+      <div class="eyebrow">ENDLESS · AUTO-AIM</div>
       <h1>DEAD<em>ZONE</em></h1>
-      <p class="sub">
-        Your rifle aims and fires itself — anything inside the scan ring dies. Your only job is to <b>keep moving</b><br>
-        Harvest the green cores they drop. Level up. Pick a mutation. Repeat.<br>
-        An <b>Abomination</b> drops a <b>Golden Core</b> — an instant level, whatever level you are on.<br>
-        There is no last wave. Only the one that finally gets you.
-      </p>
-      <p class="sub desktopOnly">
-        <kbd>W A S D</kbd> / <kbd>↑ ← ↓ →</kbd> move &nbsp;·&nbsp; <kbd>SPACE</kbd> dash (brief invulnerability) &nbsp;·&nbsp; <kbd>1 2 3</kbd> pick upgrade &nbsp;·&nbsp; <kbd>R</kbd> reroll &nbsp;·&nbsp; <kbd>P</kbd> pause
-      </p>
-      <p class="sub" id="resumeMeta" style="display:none"></p>
-      <p class="sub" style="display:none" id="touchHelp">
-        <b>Stick, bottom-left</b> — drag anywhere on the left to steer.<br>
-        <b>Tap DASH</b>, or tap anywhere on the right, to blink.<br>
-        Tap <b>❚❚</b> top-right to pause.
-      </p>
+      <p class="lede">Your rifle aims and fires on its own. Your only job is to <b>keep moving</b>.</p>
+      <div class="rule"></div>
+      <div class="dataRow" id="resumeMeta" style="display:none"></div>
       <div class="row">
         <button class="btn" id="continueBtn" style="display:none">CONTINUE</button>
         <button class="btn" id="startBtn">DEPLOY</button>
-        <button class="btn ghost" id="sandboxBtn">SANDBOX</button>
+        <button class="btn ghost sm" id="sandboxBtn">SANDBOX</button>
       </div>
+      <p class="foot" id="resumeNote" style="display:none"></p>
+      <p class="foot desktopOnly">
+        <kbd>WASD</kbd>move &nbsp;&nbsp; <kbd>SPACE</kbd>dash &nbsp;&nbsp; <kbd>1 2 3</kbd>pick &nbsp;&nbsp; <kbd>R</kbd>reroll &nbsp;&nbsp; <kbd>P</kbd>pause
+      </p>
+      <p class="foot" style="display:none" id="touchHelp">
+        Left half steers · right half dashes · ❚❚ pauses
+      </p>
     </div>
   </div>
 
   <!-- SANDBOX SETUP -->
   <div class="veil hide" id="vSandbox">
     <div class="panel">
-      <div class="kicker">SANDBOX · SEPARATE FROM YOUR REAL RUN</div>
+      <div class="eyebrow violet">SANDBOX · SEPARATE FROM YOUR REAL RUN</div>
       <h2 id="sbTitle">TEST BUILD</h2>
       <div class="sbTop">
         <label>LEVEL<input id="sbLevel" type="number" min="1" max="200" value="1"></label>
@@ -314,12 +369,12 @@
   <!-- LEVEL UP -->
   <div class="veil hide" id="vLevel">
     <div class="panel">
-      <div class="kicker">MUTATION AVAILABLE</div>
+      <div class="eyebrow">MUTATION AVAILABLE</div>
       <h2>LEVEL <span id="lvNum">2</span></h2>
       <div id="cards"></div>
       <div class="row">
         <button class="btn ghost" id="rerollBtn">REROLL · <span id="rrLeft">3</span></button>
-        <span style="font-size:10px;letter-spacing:.18em;color:var(--mute)" class="desktopOnly">PRESS 1 / 2 / 3</span>
+        <span class="foot desktopOnly" style="margin-top:0">PRESS 1 / 2 / 3</span>
       </div>
     </div>
   </div>
@@ -327,7 +382,7 @@
   <!-- PAUSE -->
   <div class="veil hide" id="vPause">
     <div class="panel" style="text-align:center">
-      <div class="kicker">SIGNAL HELD</div>
+      <div class="eyebrow" style="justify-content:center">SIGNAL HELD</div>
       <h2>PAUSED</h2>
       <p class="sub" id="pauseNote"></p>
       <div class="row" style="justify-content:center">
@@ -340,15 +395,15 @@
   <!-- DEAD -->
   <div class="veil hide" id="vDead">
     <div class="panel">
-      <div class="kicker" style="color:var(--hot)">VITALS FLATLINED</div>
-      <h1 style="font-size:clamp(30px,7vw,60px)">YOU LASTED<br><em id="dTime" style="color:var(--hot)">0:00</em></h1>
+      <div class="eyebrow hot">VITALS FLATLINED</div>
+      <h1 style="font-size:clamp(30px,7vw,58px)">YOU LASTED<br><em id="dTime" style="color:var(--hot)">0:00</em></h1>
       <div class="stats">
         <div><span>WAVE</span><b id="dWave">1</b></div>
         <div><span>LEVEL</span><b id="dLv">1</b></div>
         <div><span>KILLS</span><b id="dKills">0</b></div>
         <div><span>BEST TIME</span><b id="dBest">0:00</b></div>
       </div>
-      <div id="dBuild" class="sub" style="margin-top:0"></div>
+      <div id="dBuild" class="foot" style="margin-top:0;margin-bottom:20px;color:var(--mute)"></div>
       <div class="row">
         <button class="btn" id="againBtn">REDEPLOY</button>
         <button class="btn ghost" id="deadLobbyBtn">LOBBY</button>
@@ -2535,19 +2590,26 @@ function whenText(ts){
 /* Shows the CONTINUE button on the start screen when a run is waiting. */
 function offerResume(){
   const d = loadRun();
-  const btn = el('continueBtn'), meta = el('resumeMeta'), start = el('startBtn');
+  const btn = el('continueBtn'), meta = el('resumeMeta'), note = el('resumeNote'),
+        start = el('startBtn');
   if (!d){
-    btn.style.display = 'none'; meta.style.display = 'none';
+    btn.style.display = 'none'; meta.style.display = 'none'; note.style.display = 'none';
     start.textContent = 'DEPLOY'; start.classList.remove('ghost');
     return null;
   }
   btn.style.display = '';
   start.textContent = 'NEW RUN';
   start.classList.add('ghost');
+  /* The run summary reads as a data strip rather than a sentence — same four facts, but
+     scannable at a glance instead of parsed. */
   meta.style.display = '';
-  meta.innerHTML = 'Run in progress — <b>WAVE ' + d.g.wave + '</b> · <b>LEVEL ' + d.g.level +
-    '</b> · <b>' + fmt(d.g.t) + '</b> survived · <b>' + d.g.kills + '</b> kills<br>' +
-    'Last played ' + whenText(d.at) + '. Starting a new run discards it.';
+  meta.innerHTML =
+    '<div><span>WAVE</span><b>' + d.g.wave + '</b></div>' +
+    '<div><span>LEVEL</span><b>' + d.g.level + '</b></div>' +
+    '<div><span>SURVIVED</span><b>' + fmt(d.g.t) + '</b></div>' +
+    '<div><span>KILLS</span><b>' + d.g.kills + '</b></div>';
+  note.style.display = '';
+  note.textContent = 'Last played ' + whenText(d.at) + ' · NEW RUN discards it.';
   return d;
 }
 
