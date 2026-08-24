@@ -107,6 +107,7 @@
   .eyebrow::before{content:'';width:6px;height:6px;background:var(--phos);flex:none}
   .eyebrow.hot::before{background:var(--hot)}
   .eyebrow.violet::before{background:var(--violet)}
+  .eyebrow.gold{color:var(--amber)}.eyebrow.gold::before{background:var(--amber)}
 
   h1{font-size:clamp(38px,9vw,76px);letter-spacing:.04em;font-weight:600;line-height:.94;color:#fff}
   h1 em{font-style:normal;color:var(--phos)}
@@ -369,7 +370,7 @@
   <!-- LEVEL UP -->
   <div class="veil hide" id="vLevel">
     <div class="panel">
-      <div class="eyebrow">MUTATION AVAILABLE</div>
+      <div class="eyebrow" id="lvKicker">MUTATION AVAILABLE</div>
       <h2>LEVEL <span id="lvNum">2</span></h2>
       <div id="cards"></div>
       <div class="row">
@@ -638,6 +639,7 @@ const WARDEN_PULL = 108;            // reel speed, world units/sec
 const HERALD_CYCLE = 5.5;
 const HERALD_MARKS = 6;
 const HERALD_FUSE = 1.5;            // fill time you get to walk out of it
+const HERALD_STAGGER = 0.11;        // per-mark delay, so a volley rolls across the ground
 const HERALD_R = 86;
 const HERALD_SPREAD = 250;
 const ZONE_CAP = 14;
@@ -700,7 +702,8 @@ function reset(){
     up:{}, rerolls:3, pending:0, spawnT:0.6, shake:0, shieldT:0,
     shield:0, auraT:0, boss:null, bossT:150, waveT:0, flash:0,
     holdT:0, bossHold:0, waveClock:0, sandbox:false, bossNum:0,
-    bossBag:[], bossLast:null
+    bossBag:[], bossLast:null,
+    goldenPicks:0, goldenNow:false
   };
   S = recalc();
   player = {
@@ -919,6 +922,7 @@ function popText(x, y, txt, col){
   if (texts.length > 26) return;
   texts.push({x, y, txt, col, life:0.62});
 }
+let bannerT = null;
 function banner(txt){
   const el = document.getElementById('wave');
   el.textContent = txt;
@@ -929,6 +933,12 @@ function banner(txt){
   el.style.fontSize = clamp(px, 13, 58).toFixed(1) + 'px';
   el.classList.remove('go');
   void el.offsetWidth; el.classList.add('go');
+  /* Disarm once it has played. Left armed, the element sat there forever as a finished
+     animation holding its last text — and #hud is display:none while any overlay is open,
+     so every level-up pick re-showed the HUD and CSS restarted the animation, replaying
+     the last wave or boss title on every single upgrade. */
+  clearTimeout(bannerT);
+  bannerT = setTimeout(() => { el.classList.remove('go'); el.textContent = ''; }, 2200);
 }
 function boom(x, y, r, dmg, col = '#ffb545'){
   blasts.push({x, y, r, life:0.28, max:0.28, col});
@@ -1453,8 +1463,12 @@ function updateEnemies(dt){
           if (zones.length >= ZONE_CAP) break;
           const lx = i === 0 ? player.x + player.vx*0.6 : player.x + rnd(HERALD_SPREAD, -HERALD_SPREAD);
           const ly = i === 0 ? player.y + player.vy*0.6 : player.y + rnd(HERALD_SPREAD, -HERALD_SPREAD);
+          /* Staggered rather than simultaneous. It lands as a rolling barrage instead of
+             one flat pop, and it keeps six detonations from hitting PART_CAP on the same
+             frame — which would silently leave the last ones with no particles at all. */
+          const fuse = HERALD_FUSE + i*HERALD_STAGGER;
           zones.push({ x:arenaClamp(lx, HERALD_R), y:arenaClamp(ly, HERALD_R),
-                       t:HERALD_FUSE, max:HERALD_FUSE, dmg:e.dmg });
+                       t:fuse, max:fuse, dmg:e.dmg });
         }
       }
     }
@@ -1551,9 +1565,18 @@ function updateZones(dt){
     z.t -= dt;
     if (z.t > 0) continue;
     zones.splice(i, 1);
-    blasts.push({x:z.x, y:z.y, r:HERALD_R, life:0.3, max:0.3, col:'#f0a428'});
-    burst(z.x, z.y, 12, '#f0a428', 280, 0.45, 3);
-    game.shake = Math.max(game.shake, 6);
+    /* Layered so it reads as a detonation rather than one more ring: a white core that
+       snaps out fast, the main shell sitting exactly on the damage radius so the picture
+       still matches the rule, and a thin outer shock that runs past it and dies. Particles
+       come in two passes — fast light embers and slower heavy chunks — because a single
+       uniform spray reads as a puff. burst() already scales by FX and bails at PART_CAP,
+       so this degrades on its own on mobile. */
+    blasts.push({x:z.x, y:z.y, r:HERALD_R*0.5, life:0.17, max:0.17, col:'#fff4dc', f:true, a:0.95});
+    blasts.push({x:z.x, y:z.y, r:HERALD_R,     life:0.36, max:0.36, col:'#ffd27a', w:1.9});
+    blasts.push({x:z.x, y:z.y, r:HERALD_R*1.5, life:0.52, max:0.52, col:'#f0a428', w:0.7, a:0.55});
+    burst(z.x, z.y, 24, '#ffd27a', 430, 0.5,  3.2);
+    burst(z.x, z.y, 11, '#f0a428', 150, 0.78, 4.6);
+    game.shake = Math.max(game.shake, 11);
     if (Math.hypot(player.x - z.x, player.y - z.y) < HERALD_R + player.r) hurtPlayer(z.dmg);
   }
 }
@@ -1645,8 +1668,16 @@ function updateBullets(dt){
    bookkeeping in one place: the new `need`, the reroll bonus every 5 levels, `pending`,
    and opening the card screen. */
 function grantGoldenCore(){
-  const missing = Math.max(0, game.need - game.xp);
-  addXp(missing / Math.max(0.001, S.xpMult) + 0.001);
+  /* Grants the level outright rather than topping the XP bar up to it. Topping up spent
+     whatever progress was already banked to pay for the free level — walk into a core at
+     50% and you came out at 0%, so the core was quietly worth less the further along the
+     bar you were. game.xp is now left exactly where it stood.
+
+     Flag it BEFORE the level lands: openLevel runs synchronously off levelUp and has to
+     already know this one came from a core. */
+  game.goldenPicks = (game.goldenPicks || 0) + 1;
+  levelUp();
+  if (game.state === 'play') openLevel();
 }
 
 function updateGems(dt){
@@ -1706,16 +1737,44 @@ function updateFx(dt){
 /* ============================================================
    XP / LEVEL
    ============================================================ */
+/* The bookkeeping for gaining one level, with no opinion on what paid for it. Shared so
+   the Golden Core cannot drift out of step with normal levelling. */
+function levelUp(){
+  game.level++;
+  game.need = Math.floor(4 + game.level*2 + Math.pow(game.level, 1.9));
+  game.pending++;
+  if (game.level % 5 === 0) game.rerolls++;
+}
+
 function addXp(v){
   game.xp += v * S.xpMult;
   while (game.xp >= game.need){
     game.xp -= game.need;
-    game.level++;
-    game.need = Math.floor(4 + game.level*2 + Math.pow(game.level, 1.9));
-    game.pending++;
-    if (game.level % 5 === 0) game.rerolls++;
+    levelUp();
   }
   if (game.pending > 0 && game.state === 'play') openLevel();
+}
+
+/* A Golden Core is the reward for killing a boss, so it opens a hand of legendaries
+   instead of a normal weighted roll. Rarity cascades: fill from legendary, and only once
+   that tier is exhausted — every one of them maxed — drop to epic, then rare, then
+   common. Common holds 99 Medkits, so a hand can only come up short when literally
+   everything is maxed, which openLevel already handles. */
+const RARITY_ORDER = ['legendary', 'epic', 'rare', 'common'];
+
+function rollGoldenCards(n){
+  const out = [];
+  for (const r of RARITY_ORDER){
+    if (out.length >= n) break;
+    const tier = UPGRADES.filter(u => u.rarity === r && (game.up[u.id] || 0) < u.max);
+    // shuffle, or a partly-exhausted tier always offers the same faces in the same order
+    for (let i = tier.length - 1; i > 0; i--){
+      const j = (Math.random()*(i+1))|0;
+      const t = tier[i]; tier[i] = tier[j]; tier[j] = t;
+    }
+    for (const u of tier){ if (out.length >= n) break; out.push(u); }
+  }
+  return out;
 }
 
 function rollCards(n){
@@ -1742,9 +1801,15 @@ function openLevel(){
      Medkits. rollCards then returns nothing, and the old code opened a card screen with
      no cards — state stuck on 'level', pending never cleared, run soft-locked. Bank the
      level and keep playing instead. */
-  const picks = rollCards(3);
+  /* Golden levels are served first when several are banked: the core is a reward and it
+     should land the moment it is collected, not behind a queue of ordinary levels. */
+  const golden = (game.goldenPicks || 0) > 0;
+  if (golden) game.goldenPicks--;
+  game.goldenNow = golden;
+  const picks = golden ? rollGoldenCards(3) : rollCards(3);
   if (!picks.length){
     game.pending = 0;
+    game.goldenPicks = 0; game.goldenNow = false;   // everything maxed — don't strand the flag
     el('vLevel').classList.add('hide');
     game.state = 'play';
     syncPlaying();
@@ -1756,6 +1821,8 @@ function openLevel(){
   game.state = 'level';
   syncPlaying();
   document.getElementById('lvNum').textContent = game.level - game.pending + 1;
+  el('lvKicker').textContent = golden ? 'GOLDEN CORE · GUARANTEED' : 'MUTATION AVAILABLE';
+  el('lvKicker').classList.toggle('gold', golden);
   drawCards(picks);
   document.getElementById('rrLeft').textContent = game.rerolls;
   document.getElementById('rerollBtn').disabled = game.rerolls <= 0;
@@ -1790,6 +1857,7 @@ function choose(id){
   if (u.onPick) u.onPick();
   player.hp = Math.min(player.hp, S.maxHp);
   game.pending--;
+  game.goldenNow = false;          // openLevel sets it again if the next level is golden too
   syncChips();
   if (game.pending > 0){ openLevel(); return; }
   document.getElementById('vLevel').classList.add('hide');
@@ -1801,7 +1869,8 @@ function choose(id){
 
 function reroll(){
   if (game.rerolls <= 0) return;
-  const picks = rollCards(3);
+  // rerolling a golden hand must not quietly demote it back to a normal roll
+  const picks = game.goldenNow ? rollGoldenCards(3) : rollCards(3);
   if (!picks.length) return;          // nothing left to roll into — don't burn the reroll
   game.rerolls--;
   document.getElementById('rrLeft').textContent = game.rerolls;
@@ -1887,8 +1956,17 @@ function render(){
 
   for (const b of blasts){
     const k = b.life/b.max;
+    const al = (b.a === undefined ? 1 : b.a);
+    /* `f` fills instead of stroking — a detonation needs a solid core flash, not another
+       outline. Squared falloff so it snaps out hard instead of dissolving. */
+    if (b.f){
+      ctx.fillStyle = b.col; ctx.globalAlpha = k*k*al;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r*(0.55 + (1-k)*0.5), 0, TAU); ctx.fill();
+      ctx.globalAlpha = 1;
+      continue;
+    }
     // `a` scales opacity: the scream ring is huge and would otherwise wash out the screen
-    ctx.strokeStyle = b.col; ctx.globalAlpha = k*0.8*(b.a === undefined ? 1 : b.a);
+    ctx.strokeStyle = b.col; ctx.globalAlpha = k*0.8*al;
     ctx.lineWidth = (2 + k*3) * (b.w === undefined ? 1 : b.w);
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r*(1.15 - k*0.35), 0, TAU); ctx.stroke();
     ctx.globalAlpha = 1;
@@ -2477,7 +2555,9 @@ function saveRun(){
           bossNum:game.bossNum || 0,
           // whatever is still undrawn in the current bag, so a resumed run keeps its
           // place in the rotation instead of reshuffling from scratch
-          bossBag:game.bossBag || [], bossLast:game.bossLast || null },
+          bossBag:game.bossBag || [], bossLast:game.bossLast || null,
+          // a core collected but not yet spent must survive a reload
+          goldenPicks:game.goldenPicks || 0, goldenNow:!!game.goldenNow },
       p:{ x:r1(player.x), y:r1(player.y), vx:r1(player.vx), vy:r1(player.vy),
           hp:r1(player.hp), aim:player.aim, dashCd:player.dashCd, orbA:player.orbA },
       c:{ x:r1(cam.x), y:r1(cam.y) },
