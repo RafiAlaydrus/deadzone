@@ -881,8 +881,10 @@ function bestTarget(x, y, maxD){
    Smart Rounds behaviour, because every one of those reads from S at impact rather than
    from the bullet. The `drone` flag survives for exactly one reason — the cyan trail, so
    you can still see which rounds came from where. It changes no behaviour.
-   The scalars are kept as named constants so the old balance is one edit away. */
-const DRONE_DMG = 1, DRONE_SPEED = 1, DRONE_SIZE = 1;
+   The scalars are kept as named constants so the old balance is one edit away.
+   DRONE_RATE 1 means drones also fire on exactly the player's cadence, so Trigger Job
+   speeds them up alongside you; drop it below 1 to slow them relative to you. */
+const DRONE_DMG = 1, DRONE_SPEED = 1, DRONE_SIZE = 1, DRONE_RATE = 1;
 
 function volley(x, y, tgt, o){
   o = o || {};
@@ -1143,7 +1145,8 @@ function updatePlayer(dt){
       const R = S.range*1.1;
       const tg = nearest(d.x, d.y, R, claimed) || nearest(d.x, d.y, R);
       if (tg){
-        d.t = 0.55;
+        // same cadence as your own gun, so Trigger Job speeds the drones up with you
+        d.t = 1 / (S.fireRate * DRONE_RATE);
         d.tgt = tg;                 // kept for debugging and any future target readout
         claimed.add(tg);
         volley(d.x, d.y, tg, { dmgScale:DRONE_DMG, speedScale:DRONE_SPEED,
