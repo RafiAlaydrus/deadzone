@@ -508,7 +508,7 @@ const UPGRADES = [
   {id:'nova',  ic:'✹', name:'Bloodburst',     rarity:'epic', max:4, desc:'+22% chance corpses explode and damage the horde', apply:s=>s.novaChance+=0.22},
 
   // ---- legendary ----
-  {id:'turret',ic:'⌘', name:'Sentry Drone',   rarity:'legendary', max:3, desc:'+1 drone that orbits you and fires on its own — its rounds carry all your bullet mutations, and it picks a different target than you', apply:s=>s.turrets+=1},
+  {id:'turret',ic:'⌘', name:'Sentry Drone',   rarity:'legendary', max:3, desc:'+1 drone that orbits you and fires on its own — it fires an exact copy of your shot, every mutation included, and picks a different target than you', apply:s=>s.turrets+=1},
   {id:'double',ic:'❰❱',name:'Double Tap',     rarity:'legendary', max:4, desc:'+14% chance to instantly fire a second volley', apply:s=>s.doubleTap+=0.14},
   {id:'berserk',ic:'☣',name:'Berserker Core', rarity:'legendary', max:3, desc:'+45% damage, but −12% max vitals', apply:s=>{s.damage*=1.45;s.maxHp*=0.88;}},
   {id:'luck',  ic:'⚘', name:'Fortune',        rarity:'legendary', max:3, desc:'Rarer mutations show up far more often', apply:s=>s.luck+=1},
@@ -875,11 +875,14 @@ function bestTarget(x, y, maxD){
   return best || nearest(x, y, maxD);
 }
 
-/* One volley, used by both the player and the drones, so a drone's rounds inherit every
-   bullet-shaping upgrade you own — Split Shot, Armor Piercing, Ricochet, and (via
-   updateBullets) Frag, Tesla and Smart Rounds. Drones only differ by the scalars passed
-   in: less damage, slightly slower and smaller rounds, and the cyan trail. */
-const DRONE_DMG = 0.5, DRONE_SPEED = 0.9, DRONE_SIZE = 0.8;
+/* One volley, used by both the player and the drones. A drone round is now a literal copy
+   of a player round: same damage, speed, size, projectile count and spread, same pierce
+   and ricochet, and the same crit, lifesteal, burn, slow, knockback, Frag, Tesla and
+   Smart Rounds behaviour, because every one of those reads from S at impact rather than
+   from the bullet. The `drone` flag survives for exactly one reason — the cyan trail, so
+   you can still see which rounds came from where. It changes no behaviour.
+   The scalars are kept as named constants so the old balance is one edit away. */
+const DRONE_DMG = 1, DRONE_SPEED = 1, DRONE_SIZE = 1;
 
 function volley(x, y, tgt, o){
   o = o || {};
