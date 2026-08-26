@@ -3289,15 +3289,44 @@ function tone(f1, f2, dur, vol, type, delay){
   } catch(e){}
 }
 
+function getNoise(){
+  if (!noiseBuf){
+    noiseBuf = actx.createBuffer(1, (actx.sampleRate*0.6)|0, actx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random()*2 - 1;
+  }
+  return noiseBuf;
+}
+
+/* Air, not impact. Two things separate a whoosh from a tack, and the first cut of the dash
+   got both wrong: the gain has to SWELL rather than start at full — an instant attack on
+   noise is a click, and a click is all you hear — and the character comes from a resonant
+   BANDPASS sweeping across the noise rather than a lowpass falling off it. Longer, too;
+   under ~0.25s there is no room to read as movement. */
+function swoosh(dur, vol, f1, f2, q, delay){
+  if (!audioReady()) return;
+  try {
+    const t = actx.currentTime + (delay || 0);
+    const src = actx.createBufferSource(); src.buffer = getNoise();
+    const f = actx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.Q.value = q || 1.2;
+    f.frequency.setValueAtTime(f1, t);
+    f.frequency.exponentialRampToValueAtTime(Math.max(60, f2), t + dur);
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + dur*0.32);        // swell in
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);     // and away
+    src.connect(f); f.connect(g); g.connect(masterGain);
+    src.start(t); src.stop(t + dur + 0.04);
+  } catch(e){}
+}
+
 // filtered noise — impacts, bursts, anything with no pitch
 function noiseHit(dur, vol, cut, sweep, delay){
   if (!audioReady()) return;
   try {
-    if (!noiseBuf){
-      noiseBuf = actx.createBuffer(1, (actx.sampleRate*0.5)|0, actx.sampleRate);
-      const d = noiseBuf.getChannelData(0);
-      for (let i = 0; i < d.length; i++) d[i] = Math.random()*2 - 1;
-    }
+    getNoise();
     const t = actx.currentTime + (delay || 0);
     const src = actx.createBufferSource(); src.buffer = noiseBuf;
     const f = actx.createBiquadFilter(); f.type = 'lowpass';
@@ -3328,7 +3357,10 @@ const SFX = {
   kill:    () => { if (sfxGate('kill', 65))  noiseHit(0.09, 0.06, 1500, 320); },
   clang:   () => { if (sfxGate('clang', 70)) tone(1500, 950, 0.07, 0.085, 'square'); },
   hurt:    () => { noiseHit(0.3, 0.3, 900, 120); tone(170, 55, 0.26, 0.15, 'sawtooth'); },
-  dash:    () => { noiseHit(0.15, 0.11, 4200, 900); },
+  /* Rising bright layer for the movement, a darker falling layer under it for body — one
+     band alone reads thin. Both swell, so there is no transient to hear as a tack. */
+  dash:    () => { swoosh(0.30, 0.17, 340, 2300, 1.1);
+                   swoosh(0.36, 0.10, 1100, 300, 0.85, 0.015); },
   level:   () => { tone(440, 660, 0.15, 0.15, 'triangle');
                    tone(660, 880, 0.2, 0.13, 'triangle', 0.09); },
   pick:    () => { tone(540, 810, 0.12, 0.13, 'triangle'); },
