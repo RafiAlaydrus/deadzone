@@ -389,6 +389,7 @@
       <div class="row" style="justify-content:center">
         <button class="btn" id="resumeBtn">RESUME</button>
         <button class="btn ghost" id="lobbyBtn">LOBBY</button>
+        <button class="btn ghost sm" id="muteBtn">SOUND ON</button>
       </div>
     </div>
   </div>
@@ -1004,6 +1005,7 @@ function updateCollapse(dt){
     hurtPlayer(b.dmg * 0.8);      // through hurtPlayer, so armor, shields and i-frames apply
     game.shake = Math.max(game.shake, 5);
     burst(player.x, player.y, 5, '#ff3d6e', 200, 0.4, 2.4);
+    SFX.ring();
   }
 }
 
@@ -1050,6 +1052,7 @@ function splitChoir(e){
   enemies.push(sib);
   burst(e.x, e.y, 20, e.T.col, 320, 0.55, 3.2);
   game.shake = Math.max(game.shake, 8);
+  SFX.split();
 }
 
 function spawnBoss(kind){
@@ -1071,6 +1074,7 @@ function spawnBoss(kind){
   game.collapseArmed = false; game.collapseT = 0;   // per-boss, never carried between fights
   game.boss = b;
   banner(bossLabel(k) + ' #' + game.bossNum);
+  SFX.bossIn();
 }
 
 /* ============================================================
@@ -1124,6 +1128,7 @@ const SCREAM_CYCLE = 11;
 /* Enrages the surrounding horde and adds bodies. Deals no damage itself — the Screamer's
    whole threat is what it does to everything else. */
 function scream(e){
+  SFX.scream();
   // Faint at full radius so the player learns the reach without it washing out the
   // screen; a bright tight ring marks the source.
   blasts.push({x:e.x, y:e.y, r:SCREAM_R, life:0.6, max:0.6, col:'#ff5cf0', a:0.30, w:0.6});
@@ -1256,6 +1261,7 @@ function fire(){
   player.aim = base;
   burst(player.x + Math.cos(base)*18, player.y + Math.sin(base)*18, 3, '#ffe9a8', 90, 0.16, 1.6);
   game.shake = Math.max(game.shake, 1.4);
+  SFX.shot();
   return true;
 }
 
@@ -1297,9 +1303,10 @@ function hurt(e, dmg, o = {}){
   }
   /* A shot that does nothing must never look like a bug: blocked hits spark off the
      plate itself, in steel white, plainly unlike the body-coloured puff of one that landed. */
-  if (blockAt !== null)
+  if (blockAt !== null){
     burst(e.x + Math.cos(blockAt)*e.r, e.y + Math.sin(blockAt)*e.r, 4, '#dceaff', 210, 0.26, 1.9);
-  else burst(e.x, e.y, crit ? 5 : 2, e.T.col, 130, 0.28, 2);
+    SFX.clang();                       // a deflection must sound like one, not like silence
+  } else { burst(e.x, e.y, crit ? 5 : 2, e.T.col, 130, 0.28, 2); SFX.hit(); }
   if (e.hp <= 0) kill(e);
 }
 
@@ -1307,6 +1314,7 @@ function kill(e){
   if (e.dead) return;
   e.dead = true;
   game.kills++;
+  SFX.kill();
   burst(e.x, e.y, e.T.boss ? 46 : 8 + e.r/2, e.T.col, e.T.boss ? 420 : 200, 0.6, e.T.boss ? 4 : 2.6);
   let n = 1 + (e.T.boss ? 9 : e.T.elite ? 2 : 0);
   // a Choir dies in up to four pieces; without this each piece paid a full boss purse
@@ -1336,6 +1344,7 @@ function kill(e){
     }
     game.boss = null; game.shake = 16; game.flash = 0.3;
     banner(bossLabel(e.kind) + ' DOWN');
+    SFX.bossOut();
     game.rerolls++;
     /* Golden Core: one per Abomination, the only source in the game. Picking it up is a
        guaranteed level regardless of how far off the next one is. It homes to the player
@@ -1358,8 +1367,8 @@ function hurtPlayer(amount){
   player.inv = 0.32; player.hitT = 0.25;
   game.shake = Math.max(game.shake, 7);
   burst(player.x, player.y, 8, '#ff3d6e', 190, 0.4, 2.4);
-  buzz(22);
-  if (player.hp <= 0){ player.hp = 0; buzz([40, 60, 120]); die(); }
+  buzz(22); SFX.hurt();
+  if (player.hp <= 0){ player.hp = 0; buzz([40, 60, 120]); SFX.dead(); die(); }
 }
 
 /* ============================================================
@@ -1387,7 +1396,8 @@ function update(dt){
   const w = Math.floor(game.waveClock / 30) + 1;
   if (w > game.wave){
     game.wave = w;
-    if (w % BOSS_EVERY === 0 && !bossAlive) spawnBoss(); else banner('WAVE ' + w);
+    if (w % BOSS_EVERY === 0 && !bossAlive) spawnBoss();
+    else { banner('WAVE ' + w); SFX.wave(); }
   }
 
   updatePlayer(dt);
@@ -1484,6 +1494,7 @@ function updatePlayer(dt){
       game.acidT = 0;
       hurtPlayer(WEEPER_ACID * DIFF.dmg);
       burst(player.x, player.y, 4, '#c9e33d', 150, 0.35, 2);
+      SFX.acid();
     }
   } else game.acidT = 0;
 
@@ -1655,6 +1666,7 @@ function updateEnemies(dt){
           if (d < WARDEN_RANGE*1.2){
             W.ph = 'live'; W.t = WARDEN_HOLD; player.tether = e;
             game.shake = Math.max(game.shake, 5);
+            SFX.tether();
           } else { W.ph = 'idle'; W.t = WARDEN_CD; }
         }
       } else {                                        // live — the player may have dashed out
@@ -1680,6 +1692,7 @@ function updateEnemies(dt){
           const fuse = HERALD_FUSE + i*HERALD_STAGGER;
           zones.push({ x:arenaClamp(lx, HERALD_R), y:arenaClamp(ly, HERALD_R),
                        t:fuse, max:fuse, dmg:e.dmg });
+          SFX.mark();
         }
       }
     }
@@ -1692,6 +1705,7 @@ function updateEnemies(dt){
       if (L.ph === 'idle'){
         if (L.t <= 0 && d > 95 && d < 470){
           L.ph = 'crouch'; L.t = LEAP_TELEGRAPH;
+          SFX.leap();                  // rises across the whole wind-up, so it reads off-screen
           // Commit to where the player WILL be, and never re-aim. Holding a constant
           // orbit walks into it; changing velocity during the telegraph dodges it.
           const flight = d / LEAP_SPEED + LEAP_TELEGRAPH;
@@ -1808,6 +1822,7 @@ function updateZones(dt){
     burst(z.x, z.y, 24, '#ffd27a', 430, 0.5,  3.2);
     burst(z.x, z.y, 11, '#f0a428', 150, 0.78, 4.6);
     game.shake = Math.max(game.shake, 11);
+    SFX.boom();
     if (Math.hypot(player.x - z.x, player.y - z.y) < HERALD_R + player.r) hurtPlayer(z.dmg);
   }
 }
@@ -1939,6 +1954,7 @@ function updateGems(dt){
       if (g.golden){
         burst(g.x, g.y, 30, '#ffcf3a', 300, 0.7, 3.6);
         popText(player.x, player.y - 30, 'GOLDEN CORE', '#ffcf3a');
+        SFX.golden();
         game.shake = Math.max(game.shake, 6);
         grantGoldenCore();
       } else {
@@ -2051,6 +2067,7 @@ function openLevel(){
   }
   game.state = 'level';
   syncPlaying();
+  SFX.level();
   document.getElementById('lvNum').textContent = game.level - game.pending + 1;
   el('lvKicker').textContent = golden ? 'GOLDEN CORE · GUARANTEED' : 'MUTATION AVAILABLE';
   el('lvKicker').classList.toggle('gold', golden);
@@ -2081,6 +2098,7 @@ function drawCards(picks){
 
 function choose(id){
   const u = UP_BY_ID[id];
+  SFX.pick();
   game.up[id] = (game.up[id] || 0) + 1;
   const prev = S.maxHp;
   S = recalc();
@@ -3174,9 +3192,10 @@ function dash(){
   if (player.tether){
     burst(player.x, player.y, 14, '#5ce0d0', 250, 0.45, 2.6);
     player.tether = null;
+    SFX.snap();
   }
   burst(player.x, player.y, 12, '#9dff5c', 220, 0.4, 2.4);
-  buzz(12);
+  buzz(12); SFX.dash();
 }
 
 /* ---------- touch ----------
@@ -3220,6 +3239,127 @@ function buzz(ms){
   if (now - lastBuzz < 120) return;
   lastBuzz = now;
   try { navigator.vibrate(ms); } catch(e){}
+}
+
+/* ---------- audio ----------
+   Every sound is SYNTHESISED at runtime from oscillators and noise — there are no audio
+   files anywhere, which is what keeps this one HTML file with no assets, no network
+   requests and full offline play. It also means the palette is arcade rather than
+   cinematic, which is the right register for the rest of the game.
+
+   Two hard rules. Audio may never throw into the game loop: a browser that refuses an
+   AudioContext costs you sound, not the run, so every entry point is wrapped. And nothing
+   plays before a real user gesture — browsers reject it outright, and `gestured` above is
+   already tracking exactly that for vibrate(). */
+let actx = null, masterGain = null, noiseBuf = null;
+let muted = false;
+try { muted = localStorage.getItem('deadzone:mute') === '1'; } catch(e){}
+
+function audioReady(){
+  if (muted || !gestured) return false;
+  if (!actx){
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return false;
+      actx = new AC();
+      masterGain = actx.createGain();
+      masterGain.gain.value = 0.55;
+      masterGain.connect(actx.destination);
+    } catch(e){ actx = null; return false; }
+  }
+  if (actx.state === 'suspended'){ try { actx.resume(); } catch(e){} }
+  return true;
+}
+
+/* One shot: an oscillator sweeping f1 -> f2 under a percussive envelope. `delay` schedules
+   on the audio clock rather than setTimeout, so a two-note cue stays tight under load. */
+function tone(f1, f2, dur, vol, type, delay){
+  if (!audioReady()) return;
+  try {
+    const t = actx.currentTime + (delay || 0);
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(f1, t);
+    if (f2 && f2 !== f1) o.frequency.exponentialRampToValueAtTime(Math.max(1, f2), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + Math.min(0.012, dur*0.25));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(masterGain);
+    o.start(t); o.stop(t + dur + 0.03);
+  } catch(e){}
+}
+
+// filtered noise — impacts, bursts, anything with no pitch
+function noiseHit(dur, vol, cut, sweep, delay){
+  if (!audioReady()) return;
+  try {
+    if (!noiseBuf){
+      noiseBuf = actx.createBuffer(1, (actx.sampleRate*0.5)|0, actx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random()*2 - 1;
+    }
+    const t = actx.currentTime + (delay || 0);
+    const src = actx.createBufferSource(); src.buffer = noiseBuf;
+    const f = actx.createBiquadFilter(); f.type = 'lowpass';
+    f.frequency.setValueAtTime(cut, t);
+    if (sweep) f.frequency.exponentialRampToValueAtTime(Math.max(60, sweep), t + dur);
+    const g = actx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(masterGain);
+    src.start(t); src.stop(t + dur + 0.03);
+  } catch(e){}
+}
+
+/* Rate limiting is not polish, it is required. The gun reaches 22 shots/sec with up to
+   six projectiles, and a node per projectile would be both a wall of clicks and real
+   allocation pressure inside the frame budget. */
+const sfxT = {};
+function sfxGate(key, gap){
+  const now = performance.now();
+  if (sfxT[key] && now - sfxT[key] < gap) return false;
+  sfxT[key] = now; return true;
+}
+
+const SFX = {
+  // sits deliberately low and short — it fires constantly and must stay under everything
+  shot:    () => { if (sfxGate('shot', 55))  noiseHit(0.04, 0.045, 2600, 800); },
+  hit:     () => { if (sfxGate('hit', 70))   tone(300, 170, 0.045, 0.035, 'square'); },
+  kill:    () => { if (sfxGate('kill', 65))  noiseHit(0.09, 0.06, 1500, 320); },
+  clang:   () => { if (sfxGate('clang', 70)) tone(1500, 950, 0.07, 0.085, 'square'); },
+  hurt:    () => { noiseHit(0.3, 0.3, 900, 120); tone(170, 55, 0.26, 0.15, 'sawtooth'); },
+  dash:    () => { noiseHit(0.15, 0.11, 4200, 900); },
+  level:   () => { tone(440, 660, 0.15, 0.15, 'triangle');
+                   tone(660, 880, 0.2, 0.13, 'triangle', 0.09); },
+  pick:    () => { tone(540, 810, 0.12, 0.13, 'triangle'); },
+  golden:  () => { tone(660, 990, 0.16, 0.17, 'triangle');
+                   tone(990, 1320, 0.22, 0.15, 'triangle', 0.1); },
+  // the one telegraph most easily lost in a crowd — it rises for the whole wind-up
+  leap:    () => { if (sfxGate('leap', 90)) tone(210, 880, LEAP_TELEGRAPH, 0.085, 'sawtooth'); },
+  scream:  () => { tone(880, 300, 0.5, 0.13, 'sawtooth'); },
+  mark:    () => { if (sfxGate('mark', 45)) tone(155, 125, 0.13, 0.08, 'square'); },
+  boom:    () => { if (sfxGate('boom', 50)){ noiseHit(0.4, 0.28, 1100, 90);
+                                             tone(125, 42, 0.38, 0.2, 'sine'); } },
+  tether:  () => { tone(190, 540, 0.22, 0.15, 'sawtooth'); },
+  snap:    () => { noiseHit(0.13, 0.18, 5200, 900); tone(720, 270, 0.13, 0.11, 'square'); },
+  split:   () => { tone(350, 185, 0.2, 0.13, 'square'); },
+  acid:    () => { if (sfxGate('acid', 260)) noiseHit(0.2, 0.08, 700, 260); },
+  ring:    () => { if (sfxGate('ring', 300)) tone(85, 68, 0.3, 0.15, 'sawtooth'); },
+  wave:    () => { tone(330, 495, 0.28, 0.12, 'triangle'); },
+  bossIn:  () => { tone(210, 45, 1.1, 0.3, 'sawtooth'); noiseHit(0.9, 0.16, 520, 80); },
+  bossOut: () => { tone(95, 32, 1.0, 0.3, 'sine'); noiseHit(0.7, 0.22, 950, 70); },
+  dead:    () => { tone(220, 40, 1.5, 0.32, 'sawtooth'); noiseHit(1.2, 0.2, 700, 60); }
+};
+
+function setMuted(on){
+  muted = !!on;
+  try { localStorage.setItem('deadzone:mute', muted ? '1' : '0'); } catch(e){}
+  if (masterGain){ try { masterGain.gain.value = muted ? 0 : 0.55; } catch(e){} }
+  syncMuteBtn();
+}
+function syncMuteBtn(){
+  const b = el('muteBtn');
+  if (b) b.textContent = muted ? 'SOUND OFF' : 'SOUND ON';
 }
 
 if (IS_TOUCH){
@@ -3314,6 +3454,8 @@ el('continueBtn').onclick = () => { const d = loadRun(); if (d) resumeRun(d); el
 // REDEPLOY after a sandbox death re-runs the same test config rather than dropping you
 // into a real run — and still never clears the stored run.
 el('againBtn').onclick = () => { if (game.sandbox) startSandbox(sandboxCfg); else start(); };
+el('muteBtn').onclick = () => setMuted(!muted);
+syncMuteBtn();
 el('resumeBtn').onclick = togglePause;
 el('lobbyBtn').onclick = toLobby;
 el('deadLobbyBtn').onclick = toLobby;
