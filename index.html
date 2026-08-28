@@ -722,7 +722,6 @@ const TYPES = {
   // Never attacks. Sits outside your scan ring and enrages the horde. Auto-aim will not
   // pick it, so you have to walk at it. Marked elite for the health bar readability.
   screamer:{hp:64,  spd:62,  dmg:8,  r:15, xp:5,  col:'#ff5cf0', dark:'#4d1450', screamer:true, elite:true, name:'screamer'},
-  boss:    {hp:900, spd:47,  dmg:34, r:40, xp:70, col:'#ff3d6e', dark:'#4d0d20', boss:true, elite:true, name:'abomination'},
   // Armoured front: near-immune head-on, soft from behind, too slow to keep the plate on
   // anyone who commits to walking around it. Slower and hitting slightly softer than the
   // Abomination — its defence is the plate, not raw numbers.
@@ -773,7 +772,7 @@ function reset(){
     up:{}, rerolls:3, pending:0, spawnT:0.6, shake:0, shieldT:0,
     shield:0, auraT:0, boss:null, bossT:150, waveT:0, flash:0,
     holdT:0, bossHold:0, waveClock:0, sandbox:false, bossNum:0, bossMax:0,
-    collapseArmed:false, collapseT:0, acidT:0,
+    collapseArmed:false, collapseT:0, acidT:0, bossPack:1, gauntlet:false,
     bossBag:[], bossLast:null,
     goldenPicks:0, goldenNow:false
   };
@@ -926,7 +925,12 @@ function spawnWave(dt){
    itself does, and BOSS_DECAY only guarantees the boss *can* die, not that you survive
    long enough to see it. */
 const BOSS_BASE_HP = 2200;
-const BOSS_EVERY = 10;            // waves between appearances
+const BOSS_EVERY = 10;            // waves between single-boss appearances
+/* Every BOSS_GAUNTLET waves the whole roster arrives at once, and the pack grows by a
+   full roster each time: one of each at 50, two of each at 100, three at 150, unbounded.
+   bossHpFor already doubles per appearance, so a pack is a step change stacked on a curve
+   that is already exponential. This is meant to be the wall that ends runs. */
+const BOSS_GAUNTLET = 50;
 
 function bossHpFor(n){ return BOSS_BASE_HP * Math.pow(2, n - 1); }
 
@@ -940,7 +944,7 @@ function bossHpFor(n){ return BOSS_BASE_HP * Math.pow(2, n - 1); }
    fights themselves — longer than most runs survive. The coverage guarantee is therefore
    close to worthless. The bag earns its keep by making the FIRST boss of a run a
    different one each time: variety lands across runs, not inside one. */
-const BOSS_ROSTER = ['boss', 'bulwark', 'warden', 'herald', 'choir', 'collapsar'];
+const BOSS_ROSTER = ['bulwark', 'warden', 'herald', 'choir', 'collapsar'];
 
 const bossLabel = kind => TYPES[kind].name.toUpperCase();
 
@@ -985,9 +989,17 @@ function collapseR(){
   return Math.max(COLLAPSE_MIN, COLLAPSE_START - t*COLLAPSE_RATE);
 }
 
+/* In a pack the lead body is whichever spawned first, so the ring can no longer be read
+   off game.boss — it has to find its own. Only the FIRST collapsar projects: three
+   overlapping contracting rings would be unreadable, and the tightest one governs anyway. */
+function liveCollapsar(){
+  for (const e of enemies) if (e.T.collapsar && !e.dead) return e;
+  return null;
+}
+
 function updateCollapse(dt){
-  const b = game.boss;
-  if (!b || b.dead || !b.T.collapsar) return;
+  const b = liveCollapsar();
+  if (!b) return;
   const R = collapseR();
   if (Math.hypot(player.x - b.x, player.y - b.y) <= R){
     /* Arms on first entry, and only then. Spawn distance scales with the zoomed-out view
@@ -1010,8 +1022,8 @@ function updateCollapse(dt){
 }
 
 function drawCollapse(){
-  const b = game.boss;
-  if (!b || b.dead || !b.T.collapsar) return;
+  const b = liveCollapsar();
+  if (!b) return;
   const R = collapseR();
   const outside = Math.hypot(player.x - b.x, player.y - b.y) > R;
   ctx.save();
@@ -1072,8 +1084,37 @@ function spawnBoss(kind){
      quarter of the family. Progress has to be visible. */
   game.bossMax = bossHpFor(game.bossNum);
   game.collapseArmed = false; game.collapseT = 0;   // per-boss, never carried between fights
+  game.bossPack = 1; game.gauntlet = false;
   game.boss = b;
   banner(bossLabel(k) + ' #' + game.bossNum);
+  SFX.bossIn();
+}
+
+function spawnGauntlet(w){
+  game.bossNum = (game.bossNum || 0) + 1;
+  const each = Math.max(1, Math.floor(w / BOSS_GAUNTLET));
+  const hp = bossHpFor(game.bossNum);
+  let first = null, n = 0;
+  for (let r = 0; r < each; r++){
+    for (const k of BOSS_ROSTER){
+      const [x, y] = ringPoint();
+      const b = spawnAt(k, x, y);
+      if (!b) continue;
+      // every body in a pack shares one HP tier — mixing tiers inside a single encounter
+      // would make the bar meaningless and the difficulty unreadable
+      b.hp = b.max = hp;
+      b.num = game.bossNum;
+      b.spawnT = 0.35 + n*0.06;      // staggered arrival, so they do not land as one blob
+      if (!first) first = b;
+      n++;
+    }
+  }
+  game.boss = first;
+  game.bossPack = n;
+  game.bossMax = hp * n;             // the bar measures the whole pack, not one member
+  game.gauntlet = true;
+  game.collapseArmed = false; game.collapseT = 0;
+  banner('GAUNTLET ×' + n);
   SFX.bossIn();
 }
 
@@ -1343,14 +1384,22 @@ function kill(e){
       return;
     }
     game.boss = null; game.shake = 16; game.flash = 0.3;
-    banner(bossLabel(e.kind) + ' DOWN');
+    // naming one member of a mixed pack is as misleading here as it was in the HUD
+    banner((game.gauntlet ? 'GAUNTLET' : bossLabel(e.kind)) + ' DOWN');
     SFX.bossOut();
     game.rerolls++;
     /* Golden Core: one per Abomination, the only source in the game. Picking it up is a
        guaranteed level regardless of how far off the next one is. It homes to the player
        hard (see updateGems) so a reward that took a long fight can never be stranded. */
-    gems.push({ x:e.x, y:e.y, vx:rnd(40,-40), vy:rnd(40,-40),
-                v:0, r:11, life:0, golden:true });
+    /* One core per boss that ARRIVED, not per body that died. A Choir dies in four pieces
+       but came as one; a gauntlet comes as many and should pay as many. */
+    const cores = Math.max(1, game.bossPack || 1);
+    for (let i = 0; i < cores; i++){
+      const a = rnd(TAU);
+      gems.push({ x:arenaClamp(e.x + Math.cos(a)*i*15, 11),
+                  y:arenaClamp(e.y + Math.sin(a)*i*15, 11),
+                  vx:rnd(40,-40), vy:rnd(40,-40), v:0, r:11, life:0, golden:true });
+    }
     burst(e.x, e.y, 26, '#ffcf3a', 260, 0.8, 3.4);
   }
 }
@@ -1396,7 +1445,8 @@ function update(dt){
   const w = Math.floor(game.waveClock / 30) + 1;
   if (w > game.wave){
     game.wave = w;
-    if (w % BOSS_EVERY === 0 && !bossAlive) spawnBoss();
+    if (w % BOSS_GAUNTLET === 0 && !bossAlive) spawnGauntlet(w);
+    else if (w % BOSS_EVERY === 0 && !bossAlive) spawnBoss();
     else { banner('WAVE ' + w); SFX.wave(); }
   }
 
@@ -2650,7 +2700,9 @@ function syncHud(force){
     const decay = BOSS_DECAY();
     /* The name is part of the diffed string now. Kept out of it, two different bosses
        could share a tag and the second would wear the first one's name. */
-    const tag = bossLabel(game.boss.kind) + ' #' + (game.boss.num || game.bossNum || 1) +
+    // a pack is mixed, so naming one member would be actively misleading
+    const who = game.gauntlet ? 'GAUNTLET' : bossLabel(game.boss.kind);
+    const tag = who + ' #' + (game.boss.num || game.bossNum || 1) +
       (BOSS_N > 1 ? ' ×' + BOSS_N : '') + ' · WAVE ' + game.wave +
       (decay > 1.05 ? ' HELD · BLEEDING OUT ×' + decay.toFixed(1) : ' HELD UNTIL IT DIES');
     if (force || lastHud.bw !== tag){ el('bossName').textContent = tag; lastHud.bw = tag; }
@@ -2825,6 +2877,7 @@ function saveRun(){
           // place in the rotation instead of reshuffling from scratch
           bossBag:game.bossBag || [], bossLast:game.bossLast || null,
           bossMax:game.bossMax || 0,
+          bossPack:game.bossPack || 1, gauntlet:!!game.gauntlet,
           // a core collected but not yet spent must survive a reload
           goldenPicks:game.goldenPicks || 0, goldenNow:!!game.goldenNow },
       p:{ x:r1(player.x), y:r1(player.y), vx:r1(player.vx), vy:r1(player.vy),
@@ -3135,6 +3188,7 @@ function buildSandboxPanel(){
   // one button per roster entry, so a specific boss can be put on the field on demand
   for (const k of BOSS_ROSTER)
     add(bossLabel(k), () => { if (!game.boss || game.boss.dead) spawnBoss(k); });
+  add('GAUNTLET', () => { if (!game.boss || game.boss.dead) spawnGauntlet(game.wave); });
 }
 
 /* ============================================================
